@@ -1,7 +1,9 @@
 const STORAGE_KEY = "cozy-life-quest-v1";
 const STORAGE_BACKUP_KEY = "cozy-life-quest-v1-backup";
+const STORAGE_HISTORY_KEY = "cozy-life-quest-v1-history";
 const LEGACY_STORAGE_KEYS = ["cozy-life-quest"];
 const SHARE_FILENAME_PREFIX = "cozy-life-quest";
+const SNAPSHOT_LIMIT = 30;
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
@@ -180,6 +182,17 @@ function enhanceRitualScreen() {
   if (!ritualPanel || $("#wake-form")) return;
   const firstCard = ritualPanel.querySelector(".card");
   if (!firstCard) return;
+  if (!firstCard.querySelector(".card-head")) {
+    const head = document.createElement("div");
+    head.className = "card-head";
+    head.innerHTML = `
+      <div>
+        <h3>睡前仪式</h3>
+        <p class="muted">完成时间和睡前日记记录下来，完成可获得 +20 金币。</p>
+      </div>
+    `;
+    firstCard.prepend(head);
+  }
   const wakeCard = document.createElement("article");
   wakeCard.className = "card";
   wakeCard.innerHTML = `
@@ -1325,20 +1338,27 @@ function findTrip(id) {
 
 function loadState() {
   try {
-    const selected = pickBestSnapshot([
+    const candidates = [
       readLocalSnapshot(STORAGE_KEY, "local-main"),
       readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
+      ...readLocalHistorySnapshots(STORAGE_HISTORY_KEY, "local-history"),
       ...LEGACY_STORAGE_KEYS.map((key) => readLocalSnapshot(key, `legacy:${key}`))
-    ]);
-    if (!selected) {
+    ].filter(Boolean);
+    if (!candidates.length) {
       storageMode = "local";
       return seedState();
     }
-    storageMode = selected.source.includes("backup") || selected.source.startsWith("legacy:") ? "recovered" : "local";
-    if (storageMode === "recovered") {
-      recoveryNotice = "这次启动时主数据不可用，已经尽量从最近备份恢复。";
+    const merged = mergeSnapshotCandidates(candidates);
+    const selected = pickBestSnapshot(candidates);
+    if (!selected) {
+      storageMode = "local";
+      return merged;
     }
-    return normalizeState(selected.payload);
+    storageMode = candidates.length > 1 ? "recovered" : "local";
+    if (storageMode === "recovered") {
+      recoveryNotice = "启动时检测到多份本地记录，已经按时间顺序尽量合并恢复。";
+    }
+    return merged;
   } catch {
     return seedState();
   }
@@ -1352,6 +1372,23 @@ function seedState() {
     },
     taskTemplates: DEFAULT_TASKS,
     rewards: DEFAULT_REWARDS,
+    redemptions: [],
+    days: {},
+    ideas: [],
+    trips: [],
+    expenses: [],
+    media: []
+  };
+}
+
+function emptyState() {
+  return {
+    meta: {
+      lastSavedAt: 0,
+      version: 2
+    },
+    taskTemplates: [],
+    rewards: [],
     redemptions: [],
     days: {},
     ideas: [],
@@ -1405,23 +1442,23 @@ async function hydrateFromIndexedDb() {
   try {
     const fromDb = await loadStateFromIndexedDb("state");
     const fromBackup = await loadStateFromIndexedDb("state-backup");
-    const selected = pickBestSnapshot([
+    const fromHistory = await loadStateFromIndexedDb("history");
+    const candidates = [
       { source: storageMode === "recovered" ? "memory-recovered" : "memory", payload: state },
       fromDb ? { source: "indexeddb-main", payload: fromDb } : null,
-      fromBackup ? { source: "indexeddb-backup", payload: fromBackup } : null
-    ]);
-    if (!selected) {
+      fromBackup ? { source: "indexeddb-backup", payload: fromBackup } : null,
+      ...readHistorySnapshots(fromHistory, "indexeddb-history")
+    ].filter(Boolean);
+    if (!candidates.length) {
       persistSnapshot(state, false);
       storageMode = "local";
       renderInstallStatus();
       return;
     }
-    const incoming = normalizeState(selected.payload);
-    if (selected.source !== "memory" && selected.source !== "memory-recovered") {
-      replaceState(incoming);
-      if (selected.source.includes("backup")) {
-        recoveryNotice = "已经从最近的 IndexedDB 备份恢复当前记录。";
-      }
+    const incoming = mergeSnapshotCandidates(candidates);
+    replaceState(incoming);
+    if (candidates.length > 1) {
+      recoveryNotice = "已经把当前记录、备份和本地数据库中的快照合并到一起。";
     }
     persistSnapshot(state, false);
     storageMode = "indexeddb";
@@ -1587,18 +1624,19 @@ function onSaveNow() {
 }
 
 function onRestoreBackup() {
-  const selected = pickBestSnapshot([
+  const candidates = [
     readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
+    ...readLocalHistorySnapshots(STORAGE_HISTORY_KEY, "local-history"),
     ...LEGACY_STORAGE_KEYS.map((key) => readLocalSnapshot(key, `legacy:${key}`))
-  ]);
-  if (!selected) {
+  ].filter(Boolean);
+  if (!candidates.length) {
     recoveryNotice = "没有找到可恢复的本地备份。";
     renderInstallStatus();
     return;
   }
-  replaceState(normalizeState(selected.payload));
+  replaceState(mergeSnapshotCandidates(candidates));
   persistSnapshot(state, false);
-  recoveryNotice = "已经恢复最近备份，并重新写回当前存储。";
+  recoveryNotice = "已经从历史快照中恢复并合并可用记录。";
   render();
 }
 
@@ -1716,13 +1754,33 @@ function readLocalSnapshot(key, source) {
   }
 }
 
+function readLocalHistorySnapshots(key, sourcePrefix) {
+  const raw = localStorage.getItem(key);
+  if (!raw) return [];
+  try {
+    return readHistorySnapshots(JSON.parse(raw), sourcePrefix);
+  } catch {
+    return [];
+  }
+}
+
+function readHistorySnapshots(rawHistory, sourcePrefix) {
+  if (!Array.isArray(rawHistory)) return [];
+  return rawHistory
+    .map((entry, index) => {
+      const payload = entry?.payload || entry;
+      return payload ? { source: `${sourcePrefix}-${index}`, payload } : null;
+    })
+    .filter(Boolean);
+}
+
 function scoreSnapshot(snapshot) {
   if (!snapshot) return -1;
   const days = Object.values(snapshot.days || {}).reduce((sum, day) => {
     const enabled = day?.enabledTaskIds?.length || 0;
     const completed = day?.completedTaskIds?.length || 0;
     const socials = day?.socials?.length || 0;
-    const ritual = day?.ritual?.completed ? 1 : 0;
+    const ritual = (day?.ritual?.completed ? 1 : 0) + (day?.wake?.completed ? 1 : 0);
     const details = Object.keys(day?.taskDetails || {}).length;
     return sum + enabled + completed + socials + ritual + details;
   }, 0);
@@ -1752,9 +1810,170 @@ function pickBestSnapshot(candidates) {
     })[0] || null;
 }
 
+function mergeSnapshotCandidates(candidates) {
+  const normalized = (candidates || [])
+    .filter(Boolean)
+    .map((candidate) => normalizeState(candidate.payload || candidate))
+    .sort((a, b) => (a.meta?.lastSavedAt || 0) - (b.meta?.lastSavedAt || 0));
+
+  return normalized.reduce((merged, incoming) => mergeStates(merged, incoming), emptyState());
+}
+
+function mergeStates(base, incoming) {
+  const merged = normalizeState(base);
+  const next = normalizeState(incoming);
+  return normalizeState({
+    meta: {
+      lastSavedAt: Math.max(merged.meta?.lastSavedAt || 0, next.meta?.lastSavedAt || 0),
+      version: Math.max(merged.meta?.version || 0, next.meta?.version || 0, 2)
+    },
+    taskTemplates: mergeTaskTemplates([...(merged.taskTemplates || []), ...(next.taskTemplates || [])]),
+    rewards: mergeUniqueEntries([...(merged.rewards || []), ...(next.rewards || [])], (item) => `${item.name}|${item.cost}`),
+    redemptions: mergeUniqueEntries([...(merged.redemptions || []), ...(next.redemptions || [])], (item) => item.id || `${item.date}|${item.name}|${item.cost}`),
+    days: mergeDayMaps(merged.days || {}, next.days || {}),
+    ideas: mergeIdeas(merged.ideas || [], next.ideas || []),
+    trips: mergeTrips(merged.trips || [], next.trips || []),
+    expenses: mergeUniqueEntries([...(merged.expenses || []), ...(next.expenses || [])], (item) => item.id || `${item.date}|${item.amount}|${item.category}|${item.note || ""}|${item.tripId || ""}`),
+    media: mergeUniqueEntries([...(merged.media || []), ...(next.media || [])], (item) => item.id || `${item.type || ""}|${item.title || ""}`)
+  });
+}
+
+function mergeDayMaps(baseDays, nextDays) {
+  const result = {};
+  const keys = new Set([...Object.keys(baseDays || {}), ...Object.keys(nextDays || {})]);
+  keys.forEach((date) => {
+    result[date] = mergeDayRecords(baseDays[date], nextDays[date]);
+  });
+  return result;
+}
+
+function mergeDayRecords(baseDay, nextDay) {
+  const base = normalizeDay(baseDay || {});
+  const incoming = normalizeDay(nextDay || {});
+  return {
+    enabledTaskIds: uniqueList([...base.enabledTaskIds, ...incoming.enabledTaskIds]),
+    completedTaskIds: uniqueList([...base.completedTaskIds, ...incoming.completedTaskIds]),
+    taskDetails: mergeTaskDetails(base.taskDetails, incoming.taskDetails),
+    socials: mergeUniqueEntries([...(base.socials || []), ...(incoming.socials || [])], (item) => item.id || `${item.date || ""}|${item.person}|${item.type}|${item.feeling}|${item.note || ""}`),
+    ritual: mergeRitualEntry(base.ritual, incoming.ritual),
+    wake: mergeRitualEntry(base.wake, incoming.wake)
+  };
+}
+
+function mergeTaskDetails(baseDetails = {}, nextDetails = {}) {
+  const merged = { ...baseDetails };
+  Object.entries(nextDetails).forEach(([key, value]) => {
+    if (value) merged[key] = value;
+  });
+  return merged;
+}
+
+function mergeRitualEntry(baseEntry = {}, nextEntry = {}) {
+  const baseScore = ritualEntryScore(baseEntry);
+  const nextScore = ritualEntryScore(nextEntry);
+  return nextScore >= baseScore
+    ? {
+        time: nextEntry.time || baseEntry.time || "",
+        journal: nextEntry.journal || baseEntry.journal || "",
+        completed: Boolean(nextEntry.completed || (nextEntry.time && nextEntry.journal) || baseEntry.completed)
+      }
+    : {
+        time: baseEntry.time || nextEntry.time || "",
+        journal: baseEntry.journal || nextEntry.journal || "",
+        completed: Boolean(baseEntry.completed || (baseEntry.time && baseEntry.journal) || nextEntry.completed)
+      };
+}
+
+function ritualEntryScore(entry = {}) {
+  return (entry.completed ? 4 : 0) + (entry.time ? 1 : 0) + ((entry.journal || "").length ? 2 : 0);
+}
+
+function mergeIdeas(baseIdeas, nextIdeas) {
+  const map = new Map();
+  [...baseIdeas, ...nextIdeas].forEach((idea) => {
+    const key = `${idea.bucket}|${idea.title}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, {
+        ...idea,
+        doneDates: uniqueList([...(idea.doneDates || [])])
+      });
+      return;
+    }
+    map.set(key, {
+      ...existing,
+      ...idea,
+      id: existing.id || idea.id,
+      doneDates: uniqueList([...(existing.doneDates || []), ...(idea.doneDates || [])])
+    });
+  });
+  return [...map.values()];
+}
+
+function mergeTrips(baseTrips, nextTrips) {
+  const map = new Map();
+  [...baseTrips, ...nextTrips].forEach((trip) => {
+    const key = trip.id || `${trip.name}|${trip.start || ""}|${trip.end || ""}|${trip.company || ""}`;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, {
+        ...trip,
+        tasks: mergeTripTasks([], trip.tasks || [])
+      });
+      return;
+    }
+    map.set(key, {
+      ...existing,
+      ...trip,
+      id: existing.id || trip.id,
+      name: trip.name || existing.name,
+      company: trip.company || existing.company,
+      start: trip.start || existing.start,
+      end: trip.end || existing.end,
+      tasks: mergeTripTasks(existing.tasks || [], trip.tasks || [])
+    });
+  });
+  return [...map.values()];
+}
+
+function mergeTripTasks(baseTasks, nextTasks) {
+  const map = new Map();
+  [...baseTasks, ...nextTasks].forEach((task) => {
+    const key = task.id || task.title;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...task });
+      return;
+    }
+    map.set(key, {
+      ...existing,
+      ...task,
+      id: existing.id || task.id,
+      title: task.title || existing.title,
+      done: Boolean(existing.done || task.done),
+      completedDate: task.completedDate || existing.completedDate || ""
+    });
+  });
+  return [...map.values()];
+}
+
+function mergeUniqueEntries(items, keyFn) {
+  const map = new Map();
+  (items || []).forEach((item) => {
+    if (!item) return;
+    map.set(keyFn(item), item);
+  });
+  return [...map.values()];
+}
+
+function uniqueList(items) {
+  return [...new Set((items || []).filter(Boolean))];
+}
+
 function getLatestBackupInfo() {
   const selected = pickBestSnapshot([
     readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
+    ...readLocalHistorySnapshots(STORAGE_HISTORY_KEY, "local-history"),
     ...LEGACY_STORAGE_KEYS.map((key) => readLocalSnapshot(key, `legacy:${key}`))
   ]);
   if (!selected || scoreSnapshot(selected.payload) <= 0) {
@@ -1764,7 +1983,7 @@ function getLatestBackupInfo() {
   return {
     available: true,
     label: savedAt
-      ? `最近一次本地备份时间：${formatDateTime(savedAt)}`
+      ? `最近一次可恢复快照：${formatDateTime(savedAt)}`
       : "检测到可恢复备份，但没有保存时间"
   };
 }
@@ -1777,10 +1996,46 @@ function persistSnapshot(snapshot, touchMeta = false) {
     payload.meta.version = 2;
   }
   const serialized = JSON.stringify(payload);
+  const previousMain = readLocalSnapshot(STORAGE_KEY, "local-main")?.payload || null;
   localStorage.setItem(STORAGE_KEY, serialized);
-  localStorage.setItem(STORAGE_BACKUP_KEY, serialized);
+  const backupCandidate = pickBestSnapshot([
+    previousMain ? { source: "previous-main", payload: previousMain } : null,
+    readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
+    { source: "current", payload }
+  ]);
+  if (backupCandidate) {
+    localStorage.setItem(STORAGE_BACKUP_KEY, JSON.stringify(normalizeState(backupCandidate.payload)));
+  }
+  writeLocalHistorySnapshot(payload);
   saveStateToIndexedDb(payload, "state");
-  saveStateToIndexedDb(payload, "state-backup");
+  saveStateToIndexedDb(backupCandidate?.payload || payload, "state-backup");
+  saveStateToIndexedDb(buildSnapshotHistoryPayload(payload), "history");
+}
+
+function writeLocalHistorySnapshot(payload) {
+  try {
+    localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(buildSnapshotHistoryPayload(payload)));
+  } catch {}
+}
+
+function buildSnapshotHistoryPayload(payload) {
+  const current = normalizeState(payload);
+  const history = readLocalHistorySnapshots(STORAGE_HISTORY_KEY, "local-history")
+    .map((item) => normalizeState(item.payload));
+  const snapshots = [...history, current];
+  const deduped = [];
+  snapshots.forEach((item) => {
+    const previous = deduped[deduped.length - 1];
+    if (previous && previous.meta?.lastSavedAt === item.meta?.lastSavedAt && scoreSnapshot(previous) === scoreSnapshot(item)) {
+      deduped[deduped.length - 1] = item;
+    } else {
+      deduped.push(item);
+    }
+  });
+  return deduped.slice(-SNAPSHOT_LIMIT).map((item) => ({
+    savedAt: item.meta?.lastSavedAt || Date.now(),
+    payload: item
+  }));
 }
 
 function buildTodayExport(date) {
