@@ -1,6 +1,7 @@
 const STORAGE_KEY = "cozy-life-quest-v1";
 const STORAGE_BACKUP_KEY = "cozy-life-quest-v1-backup";
 const LEGACY_STORAGE_KEYS = ["cozy-life-quest"];
+const SHARE_FILENAME_PREFIX = "cozy-life-quest";
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
@@ -120,6 +121,7 @@ const refs = {
 boot();
 
 function boot() {
+  enhanceLayout();
   ensureDay(currentDate);
   fillSelect(refs.socialPerson, SOCIAL_PEOPLE);
   fillSelect(refs.socialType, SOCIAL_TYPES);
@@ -131,8 +133,125 @@ function boot() {
   hydrateFromIndexedDb();
   refreshPersistenceStatus();
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("sw.js").catch(() => {});
+    navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((registration) => {
+      registration.update().catch(() => {});
+    }).catch(() => {});
   }
+}
+
+function enhanceLayout() {
+  enhanceIdeaSections();
+  enhanceRitualScreen();
+  enhanceRewardCard();
+  enhanceSettingsActions();
+}
+
+function enhanceIdeaSections() {
+  const ideaGrid = refs.dailyIdeas?.closest(".idea-grid");
+  if (!ideaGrid || ideaGrid.dataset.enhanced === "true") return;
+  const sections = [
+    { key: "daily", title: "日常灵感", node: refs.dailyIdeas, open: true },
+    { key: "travel", title: "旅行灵感", node: refs.travelIdeas },
+    { key: "book", title: "想看的书", node: refs.bookIdeas },
+    { key: "movie", title: "想看的电影", node: refs.movieIdeas }
+  ];
+  const wrapper = document.createElement("div");
+  wrapper.className = "idea-sections";
+  sections.forEach((section) => {
+    const details = document.createElement("details");
+    details.className = "idea-section";
+    details.open = Boolean(section.open);
+    const summary = document.createElement("summary");
+    const title = document.createElement("span");
+    title.textContent = section.title;
+    const count = document.createElement("strong");
+    count.id = `${section.key}-ideas-count`;
+    count.textContent = "0";
+    summary.append(title, count);
+    details.append(summary, section.node);
+    wrapper.append(details);
+    refs[`${section.key}IdeasCount`] = count;
+  });
+  ideaGrid.replaceWith(wrapper);
+}
+
+function enhanceRitualScreen() {
+  const ritualPanel = document.querySelector('[data-screen="ritual"]');
+  if (!ritualPanel || $("#wake-form")) return;
+  const firstCard = ritualPanel.querySelector(".card");
+  if (!firstCard) return;
+  const wakeCard = document.createElement("article");
+  wakeCard.className = "card";
+  wakeCard.innerHTML = `
+    <div class="card-head">
+      <div>
+        <h3>起床仪式</h3>
+        <p class="muted">记录起床时间和昨晚睡得怎么样，完成可获得 +20 金币。</p>
+      </div>
+    </div>
+    <form class="quick-form" id="wake-form">
+      <label class="field">
+        <span>起床时间</span>
+        <input id="wake-time" type="time">
+      </label>
+      <label class="field field-full">
+        <span>起床小记</span>
+        <textarea id="wake-journal" rows="5" placeholder="比如：昨晚睡得安稳吗，起床时精神怎么样，今天想怎么开始。"></textarea>
+      </label>
+      <button class="primary-btn" type="submit">完成起床仪式</button>
+    </form>
+    <div class="focus-summary" id="wake-summary"></div>
+  `;
+  ritualPanel.append(wakeCard);
+  refs.wakeForm = $("#wake-form");
+  refs.wakeTime = $("#wake-time");
+  refs.wakeJournal = $("#wake-journal");
+  refs.wakeSummary = $("#wake-summary");
+  const sectionHead = ritualPanel.querySelector(".section-head");
+  if (sectionHead) {
+    const title = sectionHead.querySelector("h2");
+    const kicker = sectionHead.querySelector(".section-kicker");
+    const note = sectionHead.querySelector(".section-note");
+    if (kicker) kicker.textContent = "Ritual";
+    if (title) title.textContent = "起居仪式";
+    if (note) note.textContent = "晚上记录结束，早上记录醒来和昨晚睡得怎么样。两张卡片会分别保存。";
+  }
+  const navBtn = document.querySelector('.nav-btn[data-target="ritual"]');
+  if (navBtn) navBtn.textContent = "起居";
+}
+
+function enhanceRewardCard() {
+  const rewardHead = refs.rewardForm?.closest(".card")?.querySelector(".card-head");
+  if (!rewardHead || refs.rewardCoinTotal) return;
+  const total = document.createElement("div");
+  total.className = "coin-total";
+  total.id = "reward-coin-total";
+  total.innerHTML = coinMarkup(0);
+  rewardHead.append(total);
+  refs.rewardCoinTotal = total;
+}
+
+function enhanceSettingsActions() {
+  const actions = refs.installStatus?.nextElementSibling;
+  if (!actions || refs.saveNow) return;
+  const saveNow = createSettingsButton("save-now", "立即保存", "primary-btn");
+  const exportToday = createSettingsButton("export-today", "导出今日记录", "secondary-btn");
+  const shareBackup = createSettingsButton("share-backup", "分享备份", "secondary-btn");
+  actions.insertBefore(saveNow, refs.requestPersistence);
+  actions.insertBefore(exportToday, refs.importData);
+  actions.insertBefore(shareBackup, refs.importData);
+  refs.saveNow = saveNow;
+  refs.exportToday = exportToday;
+  refs.shareBackup = shareBackup;
+}
+
+function createSettingsButton(id, text, className) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = id;
+  button.className = className;
+  button.textContent = text;
+  return button;
 }
 
 function bindEvents() {
@@ -176,6 +295,7 @@ function bindEvents() {
   refs.bookIdeas.addEventListener("click", onRemoveEntry);
   refs.movieIdeas.addEventListener("click", onRemoveEntry);
   refs.ritualForm.addEventListener("submit", onSubmitRitual);
+  refs.wakeForm?.addEventListener("submit", onSubmitWake);
 
   refs.expenseBook.addEventListener("change", renderExpenseTripSelect);
   refs.expenseForm.addEventListener("submit", onSubmitExpense);
@@ -192,9 +312,12 @@ function bindEvents() {
   refs.tripList.addEventListener("submit", onTripSubmit);
 
   refs.installApp.addEventListener("click", onInstallApp);
+  refs.saveNow?.addEventListener("click", onSaveNow);
   refs.requestPersistence.addEventListener("click", onRequestPersistence);
   refs.restoreBackup.addEventListener("click", onRestoreBackup);
   refs.exportData.addEventListener("click", onExportData);
+  refs.exportToday?.addEventListener("click", onExportToday);
+  refs.shareBackup?.addEventListener("click", onShareBackup);
   refs.importData.addEventListener("click", () => refs.importFile.click());
   refs.importFile.addEventListener("change", onImportData);
   window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
@@ -230,8 +353,8 @@ function renderStats() {
   const roomLevel = getLevel(totals.roomPoints);
   const streak = computeRitualStreak();
   const cards = [
-    { value: `${totals.availableCoins}`, label: "当前金币" },
-    { value: `+${today.coins}`, label: "今日收获" },
+    { value: coinMarkup(totals.availableCoins), label: "当前金币" },
+    { value: coinMarkup(today.coins, true), label: "今日收获" },
     { value: `Lv.${roomLevel.level}`, label: `生活等级 · 进度 ${roomLevel.progress}%` },
     { value: `${streak} 天`, label: "睡前仪式连击" }
   ];
@@ -262,7 +385,7 @@ function renderTodayTasks() {
         <label class="task-main">
           <strong>${escapeHtml(task.name)}</strong>
           <span class="muted">${escapeHtml(task.note)}</span>
-          <div class="task-tags"><span class="tag">+${task.coins} 金币</span></div>
+          <div class="task-tags"><span class="tag">${coinMarkup(task.coins, true)}</span></div>
         </label>
         <div class="task-meta">
           <input class="task-check" type="checkbox" data-task-id="${task.id}" ${day.completedTaskIds.includes(task.id) ? "checked" : ""}>
@@ -328,10 +451,20 @@ function renderSocial() {
 }
 
 function renderIdeas() {
-  refs.dailyIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "daily").map(renderIdeaItem).join("");
-  refs.travelIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "travel").map(renderIdeaItem).join("");
-  refs.bookIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "book").map(renderIdeaItem).join("");
-  refs.movieIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "movie").map(renderIdeaItem).join("");
+  const buckets = {
+    daily: state.ideas.filter((item) => item.bucket === "daily"),
+    travel: state.ideas.filter((item) => item.bucket === "travel"),
+    book: state.ideas.filter((item) => item.bucket === "book"),
+    movie: state.ideas.filter((item) => item.bucket === "movie")
+  };
+  refs.dailyIdeas.innerHTML = buckets.daily.map(renderIdeaItem).join("");
+  refs.travelIdeas.innerHTML = buckets.travel.map(renderIdeaItem).join("");
+  refs.bookIdeas.innerHTML = buckets.book.map(renderIdeaItem).join("");
+  refs.movieIdeas.innerHTML = buckets.movie.map(renderIdeaItem).join("");
+  if (refs.dailyIdeasCount) refs.dailyIdeasCount.textContent = String(buckets.daily.length);
+  if (refs.travelIdeasCount) refs.travelIdeasCount.textContent = String(buckets.travel.length);
+  if (refs.bookIdeasCount) refs.bookIdeasCount.textContent = String(buckets.book.length);
+  if (refs.movieIdeasCount) refs.movieIdeasCount.textContent = String(buckets.movie.length);
 }
 
 function renderIdeaItem(item) {
@@ -354,7 +487,7 @@ function renderRitual() {
   refs.ritualSummary.innerHTML = `
     <div class="summary-card">
       <strong>${day.ritual.completed ? "已完成" : "还没完成"}</strong>
-      <span>睡前仪式奖励 +20 金币</span>
+      <span>睡前仪式奖励 ${coinMarkup(20, true)}</span>
     </div>
     <div class="summary-card">
       <strong>${day.ritual.time || "--:--"}</strong>
@@ -363,6 +496,23 @@ function renderRitual() {
     <div class="summary-card">
       <strong>${day.ritual.journal ? `${day.ritual.journal.length} 字` : "还没写"}</strong>
       <span>今天的睡前日记</span>
+    </div>
+  `;
+  if (!refs.wakeSummary) return;
+  refs.wakeTime.value = day.wake?.time || "";
+  refs.wakeJournal.value = day.wake?.journal || "";
+  refs.wakeSummary.innerHTML = `
+    <div class="summary-card">
+      <strong>${day.wake?.completed ? "已完成" : "还没完成"}</strong>
+      <span>起床仪式奖励 ${coinMarkup(20, true)}</span>
+    </div>
+    <div class="summary-card">
+      <strong>${day.wake?.time || "--:--"}</strong>
+      <span>今天的起床时间</span>
+    </div>
+    <div class="summary-card">
+      <strong>${day.wake?.journal ? `${day.wake.journal.length} 字` : "还没写"}</strong>
+      <span>今天的起床小记</span>
     </div>
   `;
 }
@@ -535,7 +685,7 @@ function renderRewardPanel() {
     <div class="entry-list">
       ${[
         ["生活任务", totals.lifePoints, "完成任务、任务组合奖励和灵感完成会加到这里。"],
-        ["睡前仪式", totals.ritualPoints, "完成时间 + 文字日记后可获得 20 XP。"],
+        ["起居仪式", totals.ritualPoints, "睡前和起床仪式都会累计到这里。"],
         ["记账", totals.moneyPoints, "每记一笔会增加经验值。"],
         ["社交", totals.socialPoints, "每条社交记录都会积累一点成长值。"],
         ["旅行", totals.travelPoints, "旅行任务和旅行账单都会累计经验值。"]
@@ -634,6 +784,7 @@ function renderInstallStatus() {
         ? "已从最近可用备份恢复，并重新写回本地存储"
       : "正在初始化本地数据层";
   const backupInfo = getLatestBackupInfo();
+  const savedAt = state.meta?.lastSavedAt;
 
   refs.installStatus.innerHTML = `
     <div class="status-note">
@@ -652,6 +803,10 @@ function renderInstallStatus() {
       <strong>最近本地备份</strong>
       <span>${backupInfo.label}</span>
     </div>
+    <div class="status-note">
+      <strong>最近保存时间</strong>
+      <span>${savedAt ? formatDateTime(savedAt) : "还没有保存记录"}</span>
+    </div>
     ${recoveryNotice ? `
       <div class="status-note">
         <strong>恢复提示</strong>
@@ -667,11 +822,17 @@ function renderInstallStatus() {
 
 function renderRewards() {
   const totals = computeTotals();
+  if (refs.rewardCoinTotal) {
+    refs.rewardCoinTotal.innerHTML = `
+      <span class="coin-total-label">现有金币</span>
+      <strong>${coinMarkup(totals.availableCoins)}</strong>
+    `;
+  }
   refs.rewardList.innerHTML = state.rewards.map((reward) => `
     <article class="reward-item">
       <div class="reward-main">
         <strong>${escapeHtml(reward.name)}</strong>
-        <span class="muted">${reward.cost} 金币</span>
+        <span class="muted">${coinMarkup(reward.cost)}</span>
       </div>
       <div class="reward-row">
         <button class="tiny-btn" type="button" data-redeem="${reward.id}" ${totals.availableCoins < reward.cost ? "disabled" : ""}>兑换</button>
@@ -786,6 +947,16 @@ function onSubmitRitual(event) {
   day.ritual.time = refs.ritualTime.value;
   day.ritual.journal = refs.ritualJournal.value.trim();
   day.ritual.completed = Boolean(day.ritual.time && day.ritual.journal);
+  saveState();
+  render();
+}
+
+function onSubmitWake(event) {
+  event.preventDefault();
+  const day = ensureDay(currentDate);
+  day.wake.time = refs.wakeTime.value;
+  day.wake.journal = refs.wakeJournal.value.trim();
+  day.wake.completed = Boolean(day.wake.time && day.wake.journal);
   saveState();
   render();
 }
@@ -973,6 +1144,11 @@ function ensureDay(date) {
         time: "",
         journal: "",
         completed: false
+      },
+      wake: {
+        time: "",
+        journal: "",
+        completed: false
       }
     };
   }
@@ -981,6 +1157,13 @@ function ensureDay(date) {
   }
   if (!state.days[date].ritual) {
     state.days[date].ritual = {
+      time: "",
+      journal: "",
+      completed: false
+    };
+  }
+  if (!state.days[date].wake) {
+    state.days[date].wake = {
       time: "",
       journal: "",
       completed: false
@@ -1010,7 +1193,7 @@ function computeTodayScore(date) {
   const socialCoins = day.socials.length * 3;
   const ideaCoins = state.ideas.filter((item) => item.doneDates.includes(date)).length * 3;
   const tripCoins = state.trips.flatMap((trip) => trip.tasks).filter((task) => task.completedDate === date).length * 5;
-  const ritualCoins = day.ritual.completed ? 20 : 0;
+  const ritualCoins = (day.ritual.completed ? 20 : 0) + (day.wake?.completed ? 20 : 0);
   return { coins: taskCoins + fullBonus + expenseCoins + socialCoins + ideaCoins + tripCoins + ritualCoins };
 }
 
@@ -1033,10 +1216,10 @@ function computeTotals() {
       .filter(Boolean)
       .reduce((sum, task) => sum + task.coins, 0);
     const fullBonus = getFullBonus(day).earned ? getFullBonus(day).coins : 0;
-    totals.totalCoins += taskCoins + fullBonus + day.socials.length * 3 + (day.ritual.completed ? 20 : 0);
+    totals.totalCoins += taskCoins + fullBonus + day.socials.length * 3 + (day.ritual.completed ? 20 : 0) + (day.wake?.completed ? 20 : 0);
     totals.lifePoints += day.completedTaskIds.length * 5 + fullBonus;
     totals.socialPoints += day.socials.length * 6;
-    totals.ritualPoints += day.ritual.completed ? 20 : 0;
+    totals.ritualPoints += (day.ritual.completed ? 20 : 0) + (day.wake?.completed ? 20 : 0);
   });
 
   totals.totalCoins += state.expenses.length * 4;
@@ -1257,6 +1440,11 @@ function normalizeDay(day) {
       time: day?.ritual?.time || "",
       journal: day?.ritual?.journal || "",
       completed: Boolean(day?.ritual?.completed)
+    },
+    wake: {
+      time: day?.wake?.time || "",
+      journal: day?.wake?.journal || "",
+      completed: Boolean(day?.wake?.completed)
     }
   };
 }
@@ -1382,6 +1570,13 @@ async function onRequestPersistence() {
   renderInstallStatus();
 }
 
+function onSaveNow() {
+  syncCurrentDrafts();
+  saveState();
+  recoveryNotice = "已经手动保存当前记录，并同步刷新本地备份。";
+  renderInstallStatus();
+}
+
 function onRestoreBackup() {
   const selected = pickBestSnapshot([
     readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
@@ -1399,14 +1594,37 @@ function onRestoreBackup() {
 }
 
 function onExportData() {
-  const payload = JSON.stringify(state, null, 2);
-  const blob = new Blob([payload], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `cozy-life-quest-backup-${currentDate}.json`;
-  link.click();
-  URL.revokeObjectURL(url);
+  syncCurrentDrafts();
+  saveState();
+  downloadBlob(makeJsonBlob(state), `${SHARE_FILENAME_PREFIX}-backup-${currentDate}.json`);
+}
+
+function onExportToday() {
+  syncCurrentDrafts();
+  saveState();
+  const payload = buildTodayExport(currentDate);
+  downloadBlob(makeJsonBlob(payload), `${SHARE_FILENAME_PREFIX}-day-${currentDate}.json`);
+}
+
+async function onShareBackup() {
+  syncCurrentDrafts();
+  saveState();
+  const file = makeJsonFile(state, `${SHARE_FILENAME_PREFIX}-backup-${currentDate}.json`);
+  if (!canShareFiles()) {
+    onExportData();
+    return;
+  }
+  try {
+    await navigator.share({
+      title: "四季生活手帐备份",
+      text: "把这份备份存到文件、OneDrive 或其他地方。",
+      files: [file]
+    });
+    recoveryNotice = "已经打开系统分享面板，你可以存到文件或 OneDrive。";
+  } catch {
+    recoveryNotice = "这次没有成功分享备份，已经保留在本地，可改用导出备份。";
+  }
+  renderInstallStatus();
 }
 
 async function onImportData(event) {
@@ -1556,6 +1774,68 @@ function persistSnapshot(snapshot, touchMeta = false) {
   saveStateToIndexedDb(payload, "state-backup");
 }
 
+function buildTodayExport(date) {
+  const day = ensureDay(date);
+  return {
+    exportedAt: Date.now(),
+    date,
+    day,
+    socials: day.socials || [],
+    expenses: state.expenses.filter((item) => item.date === date),
+    completedIdeas: state.ideas.filter((item) => item.doneDates.includes(date)),
+    completedTripTasks: state.trips.flatMap((trip) =>
+      trip.tasks.filter((task) => task.completedDate === date).map((task) => ({
+        tripId: trip.id,
+        tripName: trip.name,
+        task
+      }))
+    ),
+    totals: computeTodayScore(date)
+  };
+}
+
+function makeJsonBlob(payload) {
+  return new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+}
+
+function makeJsonFile(payload, filename) {
+  return new File([JSON.stringify(payload, null, 2)], filename, { type: "application/json" });
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function canShareFiles() {
+  if (typeof navigator === "undefined" || typeof navigator.share !== "function" || typeof window.File !== "function") {
+    return false;
+  }
+  if (typeof navigator.canShare !== "function") {
+    return true;
+  }
+  const testFile = new File(["{}"], "test.json", { type: "application/json" });
+  return navigator.canShare({ files: [testFile] });
+}
+
+function syncCurrentDrafts() {
+  const day = ensureDay(currentDate);
+  if (refs.ritualTime && refs.ritualJournal) {
+    day.ritual.time = refs.ritualTime.value || day.ritual.time;
+    day.ritual.journal = refs.ritualJournal.value.trim() || day.ritual.journal;
+    day.ritual.completed = Boolean(day.ritual.time && day.ritual.journal);
+  }
+  if (refs.wakeTime && refs.wakeJournal) {
+    day.wake.time = refs.wakeTime.value || day.wake.time;
+    day.wake.journal = refs.wakeJournal.value.trim() || day.wake.journal;
+    day.wake.completed = Boolean(day.wake.time && day.wake.journal);
+  }
+}
+
 function formatDateTime(timestamp) {
   return new Intl.DateTimeFormat("zh-CN", {
     month: "numeric",
@@ -1563,4 +1843,9 @@ function formatDateTime(timestamp) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(timestamp));
+}
+
+function coinMarkup(amount, signed = false) {
+  const prefix = signed && amount > 0 ? "+" : "";
+  return `${prefix}${amount}<span class="coin-inline" aria-hidden="true"></span>`;
 }
