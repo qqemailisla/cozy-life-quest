@@ -222,7 +222,7 @@ function render() {
 function renderStats() {
   const totals = computeTotals();
   const today = computeTodayScore(currentDate);
-  const roomLevel = getLevel(totals.roomPoints, 100);
+  const roomLevel = getLevel(totals.roomPoints);
   const streak = computeRitualStreak();
   const cards = [
     { value: `${totals.availableCoins}`, label: "当前金币" },
@@ -516,18 +516,16 @@ function renderTrips() {
 
 function renderRewardPanel() {
   const totals = computeTotals();
-  const level = getLevel(totals.roomPoints, 100);
-  const nextThreshold = level.level * 100;
-  const currentIntoLevel = totals.roomPoints - (level.level - 1) * 100;
+  const level = getLevel(totals.roomPoints);
   refs.xpBreakdown.innerHTML = `
     <div class="focus-summary">
       <div class="summary-card"><strong>Lv.${level.level}</strong><span>当前等级</span></div>
       <div class="summary-card"><strong>${totals.roomPoints} XP</strong><span>累计经验值</span></div>
-      <div class="summary-card"><strong>${Math.max(nextThreshold - totals.roomPoints, 0)} XP</strong><span>距离下一级</span></div>
+      <div class="summary-card"><strong>${level.remaining} XP</strong><span>距离下一级</span></div>
     </div>
     <div class="summary-card">
       <strong>升级规则</strong>
-      <span>每累计 100 经验值升 1 级。当前等级内已积累 ${currentIntoLevel} XP。</span>
+      <span>升级会越来越难。当前等级需要 ${level.currentLevelRequirement} XP，你已经积累了 ${level.currentXp} XP。</span>
     </div>
     <div class="entry-list">
       ${[
@@ -1057,10 +1055,32 @@ function computeRitualStreak() {
   return streak;
 }
 
-function getLevel(points, step) {
-  const level = Math.floor(points / step) + 1;
-  const progress = Math.min(99, Math.round(((points % step) / step) * 100));
-  return { level, progress };
+function getLevel(points) {
+  let level = 1;
+  let spent = 0;
+  let currentLevelRequirement = xpNeededForLevel(level);
+
+  while (points >= spent + currentLevelRequirement) {
+    spent += currentLevelRequirement;
+    level += 1;
+    currentLevelRequirement = xpNeededForLevel(level);
+  }
+
+  const currentXp = points - spent;
+  const remaining = Math.max(currentLevelRequirement - currentXp, 0);
+  const progress = Math.min(99, Math.round((currentXp / currentLevelRequirement) * 100));
+
+  return {
+    level,
+    currentXp,
+    currentLevelRequirement,
+    remaining,
+    progress
+  };
+}
+
+function xpNeededForLevel(level) {
+  return 100 + (level - 1) * 40;
 }
 
 function getSeasonKey(dateString) {
