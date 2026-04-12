@@ -1,4 +1,6 @@
 const STORAGE_KEY = "cozy-life-quest-v1";
+const STORAGE_BACKUP_KEY = "cozy-life-quest-v1-backup";
+const LEGACY_STORAGE_KEYS = ["cozy-life-quest"];
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
@@ -44,6 +46,7 @@ let activeSocialRange = "month";
 let deferredInstallPrompt = null;
 let persistenceStatus = "checking";
 let storageMode = "loading";
+let recoveryNotice = "";
 
 const state = loadState();
 
@@ -103,6 +106,7 @@ const refs = {
   installStatus: $("#install-status"),
   installApp: $("#install-app"),
   requestPersistence: $("#request-persistence"),
+  restoreBackup: $("#restore-backup"),
   exportData: $("#export-data"),
   importData: $("#import-data"),
   importFile: $("#import-file"),
@@ -189,6 +193,7 @@ function bindEvents() {
 
   refs.installApp.addEventListener("click", onInstallApp);
   refs.requestPersistence.addEventListener("click", onRequestPersistence);
+  refs.restoreBackup.addEventListener("click", onRestoreBackup);
   refs.exportData.addEventListener("click", onExportData);
   refs.importData.addEventListener("click", () => refs.importFile.click());
   refs.importFile.addEventListener("change", onImportData);
@@ -625,7 +630,10 @@ function renderInstallStatus() {
     ? "当前主存储为 IndexedDB，并同步镜像到本地存储"
     : storageMode === "local"
       ? "当前使用本地存储，并同步尝试写入 IndexedDB"
+      : storageMode === "recovered"
+        ? "已从最近可用备份恢复，并重新写回本地存储"
       : "正在初始化本地数据层";
+  const backupInfo = getLatestBackupInfo();
 
   refs.installStatus.innerHTML = `
     <div class="status-note">
@@ -640,10 +648,21 @@ function renderInstallStatus() {
       <strong>当前存储方式</strong>
       <span>${storageLabel}</span>
     </div>
+    <div class="status-note">
+      <strong>最近本地备份</strong>
+      <span>${backupInfo.label}</span>
+    </div>
+    ${recoveryNotice ? `
+      <div class="status-note">
+        <strong>恢复提示</strong>
+        <span>${recoveryNotice}</span>
+      </div>
+    ` : ""}
   `;
 
   refs.installApp.textContent = isInstalled ? "已安装" : deferredInstallPrompt ? "安装到桌面" : "查看安装方式";
   refs.installApp.disabled = isInstalled;
+  refs.restoreBackup.disabled = !backupInfo.available;
 }
 
 function renderRewards() {
@@ -1114,13 +1133,20 @@ function findTrip(id) {
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
+    const selected = pickBestSnapshot([
+      readLocalSnapshot(STORAGE_KEY, "local-main"),
+      readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
+      ...LEGACY_STORAGE_KEYS.map((key) => readLocalSnapshot(key, `legacy:${key}`))
+    ]);
+    if (!selected) {
       storageMode = "local";
       return seedState();
     }
-    storageMode = "local";
-    return normalizeState(JSON.parse(raw));
+    storageMode = selected.source.includes("backup") || selected.source.startsWith("legacy:") ? "recovered" : "local";
+    if (storageMode === "recovered") {
+      recoveryNotice = "这次启动时主数据不可用，已经尽量从最近备份恢复。";
+    }
+    return normalizeState(selected.payload);
   } catch {
     return seedState();
   }
@@ -1147,8 +1173,7 @@ function saveState() {
   state.meta = state.meta || {};
   state.meta.lastSavedAt = Date.now();
   state.meta.version = 2;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  saveStateToIndexedDb(state);
+  persistSnapshot(state, false);
 }
 
 function normalizeState(parsed) {
@@ -1186,20 +1211,27 @@ function normalizeState(parsed) {
 
 async function hydrateFromIndexedDb() {
   try {
-    const fromDb = await loadStateFromIndexedDb();
-    if (!fromDb) {
-      saveStateToIndexedDb(state);
+    const fromDb = await loadStateFromIndexedDb("state");
+    const fromBackup = await loadStateFromIndexedDb("state-backup");
+    const selected = pickBestSnapshot([
+      { source: storageMode === "recovered" ? "memory-recovered" : "memory", payload: state },
+      fromDb ? { source: "indexeddb-main", payload: fromDb } : null,
+      fromBackup ? { source: "indexeddb-backup", payload: fromBackup } : null
+    ]);
+    if (!selected) {
+      persistSnapshot(state, false);
       storageMode = "local";
       renderInstallStatus();
       return;
     }
-    const incoming = normalizeState(fromDb);
-    if ((incoming.meta?.lastSavedAt || 0) > (state.meta?.lastSavedAt || 0)) {
+    const incoming = normalizeState(selected.payload);
+    if (selected.source !== "memory" && selected.source !== "memory-recovered") {
       replaceState(incoming);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } else {
-      saveStateToIndexedDb(state);
+      if (selected.source.includes("backup")) {
+        recoveryNotice = "已经从最近的 IndexedDB 备份恢复当前记录。";
+      }
     }
+    persistSnapshot(state, false);
     storageMode = "indexeddb";
     render();
   } catch {
@@ -1261,25 +1293,25 @@ function openAppDb() {
   });
 }
 
-async function loadStateFromIndexedDb() {
+async function loadStateFromIndexedDb(key = "state") {
   const db = await openAppDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction("app", "readonly");
     const store = tx.objectStore("app");
-    const request = store.get("state");
+    const request = store.get(key);
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result || null);
   });
 }
 
-async function saveStateToIndexedDb(payload) {
+async function saveStateToIndexedDb(payload, key = "state") {
   try {
     const db = await openAppDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction("app", "readwrite");
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
-      tx.objectStore("app").put(JSON.parse(JSON.stringify(payload)), "state");
+      tx.objectStore("app").put(JSON.parse(JSON.stringify(payload)), key);
     });
     storageMode = "indexeddb";
     renderInstallStatus();
@@ -1348,6 +1380,22 @@ async function onRequestPersistence() {
     persistenceStatus = "unsupported";
   }
   renderInstallStatus();
+}
+
+function onRestoreBackup() {
+  const selected = pickBestSnapshot([
+    readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
+    ...LEGACY_STORAGE_KEYS.map((key) => readLocalSnapshot(key, `legacy:${key}`))
+  ]);
+  if (!selected) {
+    recoveryNotice = "没有找到可恢复的本地备份。";
+    renderInstallStatus();
+    return;
+  }
+  replaceState(normalizeState(selected.payload));
+  persistSnapshot(state, false);
+  recoveryNotice = "已经恢复最近备份，并重新写回当前存储。";
+  render();
 }
 
 function onExportData() {
@@ -1429,4 +1477,90 @@ function escapeHtml(text) {
 
 function $(selector) {
   return document.querySelector(selector);
+}
+
+function readLocalSnapshot(key, source) {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    return { source, payload: JSON.parse(raw) };
+  } catch {
+    return null;
+  }
+}
+
+function scoreSnapshot(snapshot) {
+  if (!snapshot) return -1;
+  const days = Object.values(snapshot.days || {}).reduce((sum, day) => {
+    const enabled = day?.enabledTaskIds?.length || 0;
+    const completed = day?.completedTaskIds?.length || 0;
+    const socials = day?.socials?.length || 0;
+    const ritual = day?.ritual?.completed ? 1 : 0;
+    const details = Object.keys(day?.taskDetails || {}).length;
+    return sum + enabled + completed + socials + ritual + details;
+  }, 0);
+  const trips = (snapshot.trips || []).reduce((sum, trip) => sum + 1 + (trip.tasks?.length || 0), 0);
+  return days
+    + (snapshot.ideas?.length || 0)
+    + (snapshot.expenses?.length || 0)
+    + (snapshot.redemptions?.length || 0)
+    + trips
+    + ((snapshot.rewards?.length || 0) > DEFAULT_REWARDS.length ? 1 : 0);
+}
+
+function pickBestSnapshot(candidates) {
+  return (candidates || [])
+    .filter(Boolean)
+    .map((candidate) => ({
+      ...candidate,
+      score: scoreSnapshot(candidate.payload),
+      savedAt: candidate.payload?.meta?.lastSavedAt || 0,
+      meaningful: scoreSnapshot(candidate.payload) > 0
+    }))
+    .sort((a, b) => {
+      if (a.meaningful !== b.meaningful) return Number(b.meaningful) - Number(a.meaningful);
+      if (a.savedAt !== b.savedAt) return b.savedAt - a.savedAt;
+      if (a.score !== b.score) return b.score - a.score;
+      return b.savedAt - a.savedAt;
+    })[0] || null;
+}
+
+function getLatestBackupInfo() {
+  const selected = pickBestSnapshot([
+    readLocalSnapshot(STORAGE_BACKUP_KEY, "local-backup"),
+    ...LEGACY_STORAGE_KEYS.map((key) => readLocalSnapshot(key, `legacy:${key}`))
+  ]);
+  if (!selected || scoreSnapshot(selected.payload) <= 0) {
+    return { available: false, label: "还没有检测到可恢复的本地备份" };
+  }
+  const savedAt = selected.payload?.meta?.lastSavedAt;
+  return {
+    available: true,
+    label: savedAt
+      ? `最近一次本地备份时间：${formatDateTime(savedAt)}`
+      : "检测到可恢复备份，但没有保存时间"
+  };
+}
+
+function persistSnapshot(snapshot, touchMeta = false) {
+  const payload = normalizeState(snapshot);
+  if (touchMeta) {
+    payload.meta = payload.meta || {};
+    payload.meta.lastSavedAt = Date.now();
+    payload.meta.version = 2;
+  }
+  const serialized = JSON.stringify(payload);
+  localStorage.setItem(STORAGE_KEY, serialized);
+  localStorage.setItem(STORAGE_BACKUP_KEY, serialized);
+  saveStateToIndexedDb(payload, "state");
+  saveStateToIndexedDb(payload, "state-backup");
+}
+
+function formatDateTime(timestamp) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(timestamp));
 }
