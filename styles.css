@@ -155,6 +155,16 @@ button {
   gap: 12px;
 }
 
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--accent-deep);
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
 .season-caption {
   margin: 0;
   font-size: 0.95rem;
@@ -449,7 +459,6 @@ button {
 .pill-log,
 .template-grid,
 .focus-summary,
-.room-status,
 .install-status,
 .install-actions,
 .media-list {
@@ -494,6 +503,10 @@ button {
 .media-columns {
   display: grid;
   gap: 8px;
+}
+
+.compact-tabs {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
 }
 
 #expense-trip-field {
@@ -641,7 +654,7 @@ button {
   color: #7b4e17;
 }
 
-.idea-columns {
+.idea-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -672,7 +685,6 @@ button {
 .reward-list:empty::before,
 .idea-list:empty::before,
 .pill-log:empty::before,
-.room-status:empty::before,
 .media-list:empty::before {
   content: "这里还空着，先记第一条吧。";
   display: block;
@@ -712,7 +724,6 @@ button {
   color: var(--accent-deep);
 }
 
-.room-card,
 .install-card {
   display: grid;
   gap: 14px;
@@ -720,123 +731,6 @@ button {
 
 .install-actions {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.room-visual {
-  position: relative;
-  min-height: 300px;
-  border-radius: 28px;
-  overflow: hidden;
-  background:
-    radial-gradient(circle at 14% 14%, rgba(255, 255, 255, 0.86), transparent 20%),
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--accent-soft) 72%, white) 0 46%,
-      color-mix(in srgb, var(--accent) 22%, white) 46% 58%,
-      color-mix(in srgb, var(--season-dark) 20%, #f0d1aa) 58% 100%
-    );
-}
-
-.shelf-scene,
-.shelf-overlay {
-  position: absolute;
-  inset: 0;
-}
-
-.shelf-floor {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 30%;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--mint) 64%, white), color-mix(in srgb, var(--leaf) 56%, white));
-}
-
-.shelf-plank,
-.dvd-plank {
-  position: absolute;
-  left: 26px;
-  right: 26px;
-  height: 12px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--season-dark) 28%, white);
-}
-
-.shelf-plank {
-  top: 92px;
-}
-
-.dvd-plank {
-  bottom: 102px;
-}
-
-.shelf-items,
-.dvd-items {
-  position: absolute;
-  left: 34px;
-  right: 34px;
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-}
-
-.shelf-items {
-  top: 36px;
-  height: 56px;
-}
-
-.dvd-items {
-  bottom: 114px;
-  height: 46px;
-}
-
-.book-spine,
-.dvd-spine {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 8px 4px;
-  color: rgba(51, 39, 47, 0.8);
-  text-align: center;
-  overflow: hidden;
-}
-
-.book-spine {
-  width: 28px;
-  min-width: 28px;
-  height: 100%;
-  border-radius: 10px 10px 4px 4px;
-  background: color-mix(in srgb, var(--accent) 24%, white);
-  font-size: 0.66rem;
-}
-
-.dvd-spine {
-  width: 54px;
-  min-width: 54px;
-  height: 100%;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--mint) 64%, white);
-  font-size: 0.68rem;
-}
-
-.book-spine.done,
-.dvd-spine.done {
-  background: color-mix(in srgb, var(--leaf) 42%, white);
-}
-
-.media-columns {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.media-actions {
-  margin-top: 10px;
-}
-
-.media-empty {
-  padding: 14px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.62);
-  color: var(--muted);
 }
 
 .cost {
@@ -878,7 +772,7 @@ button {
 
   .quick-form,
   .tabs-inline,
-  .idea-columns,
+  .idea-grid,
   .template-grid,
   .install-actions,
   .media-columns {

@@ -38,6 +38,9 @@ const SEASONS = {
 let currentDate = todayISO();
 let activeScreen = "today";
 let activeBookTab = "daily";
+let activeExpenseStatsRange = "month";
+let activeSocialView = "list";
+let activeSocialRange = "month";
 let deferredInstallPrompt = null;
 let persistenceStatus = "checking";
 let storageMode = "loading";
@@ -49,6 +52,8 @@ const refs = {
   navBtns: [...document.querySelectorAll(".nav-btn")],
   seasonLabel: $("#season-label"),
   seasonCaption: $("#season-caption"),
+  openSettings: $("#open-settings"),
+  settingsDialog: $("#settings-dialog"),
   topStats: $("#top-stats"),
   currentDate: $("#current-date"),
   prevDay: $("#prev-day"),
@@ -69,6 +74,8 @@ const refs = {
   ideaBucket: $("#idea-bucket"),
   dailyIdeas: $("#daily-ideas"),
   travelIdeas: $("#travel-ideas"),
+  bookIdeas: $("#book-ideas"),
+  movieIdeas: $("#movie-ideas"),
   ritualForm: $("#ritual-form"),
   ritualTime: $("#ritual-time"),
   ritualJournal: $("#ritual-journal"),
@@ -82,24 +89,23 @@ const refs = {
   expenseNote: $("#expense-note"),
   expensePanel: $("#expense-panel"),
   bookTabs: [...document.querySelectorAll("[data-book-tab]")],
+  socialViewBtns: [...document.querySelectorAll("[data-social-view]")],
+  socialRangeBtns: [...document.querySelectorAll("[data-social-range]")],
+  socialStats: $("#social-stats"),
+  socialRangeTabs: $("#social-range-tabs"),
   tripForm: $("#trip-form"),
   tripName: $("#trip-name"),
   tripCompany: $("#trip-company"),
   tripStart: $("#trip-start"),
   tripEnd: $("#trip-end"),
   tripList: $("#trip-list"),
-  roomVisual: $("#room-visual"),
-  roomStatus: $("#room-status"),
+  xpBreakdown: $("#xp-breakdown"),
   installStatus: $("#install-status"),
   installApp: $("#install-app"),
   requestPersistence: $("#request-persistence"),
   exportData: $("#export-data"),
   importData: $("#import-data"),
   importFile: $("#import-file"),
-  mediaForm: $("#media-form"),
-  mediaType: $("#media-type"),
-  mediaTitle: $("#media-title"),
-  mediaNote: $("#media-note"),
   rewardForm: $("#reward-form"),
   rewardName: $("#reward-name"),
   rewardCost: $("#reward-cost"),
@@ -134,6 +140,10 @@ function bindEvents() {
     ensureDay(currentDate);
     render();
   });
+  refs.openSettings.addEventListener("click", () => {
+    if (typeof refs.settingsDialog.showModal === "function") refs.settingsDialog.showModal();
+    else refs.settingsDialog.setAttribute("open", "open");
+  });
 
   refs.openTaskPicker.addEventListener("click", () => {
     if (typeof refs.taskDialog.showModal === "function") refs.taskDialog.showModal();
@@ -144,15 +154,28 @@ function bindEvents() {
 
   refs.socialForm.addEventListener("submit", onSubmitSocial);
   refs.socialLog.addEventListener("click", onRemoveEntry);
+  refs.socialViewBtns.forEach((btn) => btn.addEventListener("click", () => {
+    activeSocialView = btn.dataset.socialView;
+    renderSocial();
+  }));
+  refs.socialRangeBtns.forEach((btn) => btn.addEventListener("click", () => {
+    activeSocialRange = btn.dataset.socialRange;
+    renderSocial();
+  }));
   refs.ideaForm.addEventListener("submit", onSubmitIdea);
   refs.dailyIdeas.addEventListener("change", onToggleIdea);
   refs.travelIdeas.addEventListener("change", onToggleIdea);
+  refs.bookIdeas.addEventListener("change", onToggleIdea);
+  refs.movieIdeas.addEventListener("change", onToggleIdea);
   refs.dailyIdeas.addEventListener("click", onRemoveEntry);
   refs.travelIdeas.addEventListener("click", onRemoveEntry);
+  refs.bookIdeas.addEventListener("click", onRemoveEntry);
+  refs.movieIdeas.addEventListener("click", onRemoveEntry);
   refs.ritualForm.addEventListener("submit", onSubmitRitual);
 
   refs.expenseBook.addEventListener("change", renderExpenseTripSelect);
   refs.expenseForm.addEventListener("submit", onSubmitExpense);
+  refs.expensePanel.addEventListener("click", onExpensePanelClick);
   refs.expensePanel.addEventListener("click", onRemoveEntry);
   refs.bookTabs.forEach((btn) => btn.addEventListener("click", () => {
     activeBookTab = btn.dataset.bookTab;
@@ -172,8 +195,6 @@ function bindEvents() {
   window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
   window.addEventListener("appinstalled", onAppInstalled);
 
-  refs.mediaForm.addEventListener("submit", onSubmitMedia);
-  refs.roomStatus.addEventListener("click", onMediaClick);
   refs.rewardForm.addEventListener("submit", onSubmitReward);
   refs.rewardList.addEventListener("click", onRewardClick);
   refs.todayTaskList.addEventListener("input", onTaskDetailInput);
@@ -193,7 +214,7 @@ function render() {
   renderExpenses();
   renderTrips();
   renderInstallStatus();
-  renderRoom();
+  renderRewardPanel();
   renderRewards();
   updateNav();
 }
@@ -281,6 +302,12 @@ function renderTaskDetailField(task, day) {
 
 function renderSocial() {
   const day = ensureDay(currentDate);
+  const socials = collectSocialEntries();
+  refs.socialViewBtns.forEach((btn) => btn.classList.toggle("active", btn.dataset.socialView === activeSocialView));
+  refs.socialRangeBtns.forEach((btn) => btn.classList.toggle("active", btn.dataset.socialRange === activeSocialRange));
+  refs.socialLog.style.display = activeSocialView === "list" ? "grid" : "none";
+  refs.socialStats.style.display = activeSocialView === "stats" ? "grid" : "none";
+  refs.socialRangeTabs.style.display = activeSocialView === "stats" ? "grid" : "none";
   refs.socialLog.innerHTML = day.socials.slice().reverse().map((item) => `
     <article class="pill-item">
       <div class="pill-row">
@@ -292,11 +319,14 @@ function renderSocial() {
       ${item.note ? `<div class="muted">${escapeHtml(item.note)}</div>` : ""}
     </article>
   `).join("");
+  refs.socialStats.innerHTML = renderSocialStats(filterEntriesByRange(socials, activeSocialRange, currentDate));
 }
 
 function renderIdeas() {
   refs.dailyIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "daily").map(renderIdeaItem).join("");
   refs.travelIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "travel").map(renderIdeaItem).join("");
+  refs.bookIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "book").map(renderIdeaItem).join("");
+  refs.movieIdeas.innerHTML = state.ideas.filter((item) => item.bucket === "movie").map(renderIdeaItem).join("");
 }
 
 function renderIdeaItem(item) {
@@ -328,6 +358,32 @@ function renderRitual() {
     <div class="summary-card">
       <strong>${day.ritual.journal ? `${day.ritual.journal.length} 字` : "还没写"}</strong>
       <span>今天的睡前日记</span>
+    </div>
+  `;
+}
+
+function renderSocialStats(items) {
+  if (!items.length) {
+    return '<div class="summary-card"><strong>还没有社交记录</strong><span>切到本周 / 本月 / 今年后，这里会显示次数和标签统计。</span></div>';
+  }
+  const byFeeling = countBy(items, "feeling");
+  const byType = countBy(items, "type");
+  return `
+    <div class="focus-summary">
+      <div class="summary-card"><strong>${items.length} 次</strong><span>${rangeLabel(activeSocialRange)}社交记录</span></div>
+      <div class="summary-card"><strong>${topCountLabel(byFeeling)}</strong><span>最常见感受</span></div>
+      <div class="summary-card"><strong>${topCountLabel(byType)}</strong><span>最常见形式</span></div>
+    </div>
+    <div class="entry-list">
+      ${Object.entries(byFeeling).sort((a, b) => b[1] - a[1]).map(([name, count]) => `
+        <article class="entry-item">
+          <div class="entry-main">
+            <strong>${escapeHtml(name)}</strong>
+            <span class="muted">感受标签</span>
+          </div>
+          <div class="cost">${count} 次</div>
+        </article>
+      `).join("")}
     </div>
   `;
 }
@@ -365,26 +421,33 @@ function renderExpenses() {
 }
 
 function renderExpenseStats() {
-  const dailyList = state.expenses.filter((item) => item.book === "daily");
-  const travelList = state.expenses.filter((item) => item.book === "travel");
-  const all = [...dailyList, ...travelList];
-  const categoryMap = all.reduce((acc, item) => {
+  const all = state.expenses;
+  const weekList = filterEntriesByRange(all, "week", currentDate);
+  const monthList = filterEntriesByRange(all, "month", currentDate);
+  const yearList = filterEntriesByRange(all, "year", currentDate);
+  const currentRangeList = filterEntriesByRange(all, activeExpenseStatsRange, currentDate);
+  const categoryMap = currentRangeList.reduce((acc, item) => {
     acc[item.category] = (acc[item.category] || 0) + item.amount;
     return acc;
   }, {});
 
   refs.expensePanel.innerHTML = `
     <div class="focus-summary">
-      <div class="summary-card"><strong>${formatCurrency(sumAmount(dailyList))}</strong><span>日常账本</span></div>
-      <div class="summary-card"><strong>${formatCurrency(sumAmount(travelList))}</strong><span>旅行账本</span></div>
-      <div class="summary-card"><strong>${formatCurrency(sumAmount(all))}</strong><span>总统计</span></div>
+      <div class="summary-card"><strong>${formatCurrency(sumAmount(weekList))}</strong><span>本周</span></div>
+      <div class="summary-card"><strong>${formatCurrency(sumAmount(monthList))}</strong><span>本月</span></div>
+      <div class="summary-card"><strong>${formatCurrency(sumAmount(yearList))}</strong><span>今年</span></div>
+    </div>
+    <div class="tabs-inline compact-tabs">
+      <button class="chip-btn ${activeExpenseStatsRange === "week" ? "active" : ""}" type="button" data-expense-range="week">看本周分类</button>
+      <button class="chip-btn ${activeExpenseStatsRange === "month" ? "active" : ""}" type="button" data-expense-range="month">看本月分类</button>
+      <button class="chip-btn ${activeExpenseStatsRange === "year" ? "active" : ""}" type="button" data-expense-range="year">看今年分类</button>
     </div>
     <div class="entry-list">
       ${Object.entries(categoryMap).sort((a, b) => b[1] - a[1]).map(([name, value]) => `
         <article class="entry-item">
           <div class="entry-main">
             <strong>${escapeHtml(name)}</strong>
-            <span class="muted">分类统计</span>
+            <span class="muted">${rangeLabel(activeExpenseStatsRange)}分类统计</span>
           </div>
           <div class="cost">${formatCurrency(value)}</div>
         </article>
@@ -451,70 +514,39 @@ function renderTrips() {
   }).join("");
 }
 
-function renderRoom() {
-  const books = state.media.filter((item) => item.type === "book");
-  const movies = state.media.filter((item) => item.type === "movie");
-
-  refs.roomVisual.innerHTML = `
-    <div class="shelf-scene">
-      <div class="shelf-floor"></div>
-      <div class="shelf-plank"></div>
-      <div class="dvd-plank"></div>
-      <div class="shelf-items">
-        ${renderShelfSpines(books.slice(0, 8), "book")}
-      </div>
-      <div class="dvd-items">
-        ${renderShelfSpines(movies.slice(0, 5), "movie")}
-      </div>
+function renderRewardPanel() {
+  const totals = computeTotals();
+  const level = getLevel(totals.roomPoints, 100);
+  const nextThreshold = level.level * 100;
+  const currentIntoLevel = totals.roomPoints - (level.level - 1) * 100;
+  refs.xpBreakdown.innerHTML = `
+    <div class="focus-summary">
+      <div class="summary-card"><strong>Lv.${level.level}</strong><span>当前等级</span></div>
+      <div class="summary-card"><strong>${totals.roomPoints} XP</strong><span>累计经验值</span></div>
+      <div class="summary-card"><strong>${Math.max(nextThreshold - totals.roomPoints, 0)} XP</strong><span>距离下一级</span></div>
+    </div>
+    <div class="summary-card">
+      <strong>升级规则</strong>
+      <span>每累计 100 经验值升 1 级。当前等级内已积累 ${currentIntoLevel} XP。</span>
+    </div>
+    <div class="entry-list">
+      ${[
+        ["生活任务", totals.lifePoints, "完成任务、任务组合奖励和灵感完成会加到这里。"],
+        ["睡前仪式", totals.ritualPoints, "完成时间 + 文字日记后可获得 20 XP。"],
+        ["记账", totals.moneyPoints, "每记一笔会增加经验值。"],
+        ["社交", totals.socialPoints, "每条社交记录都会积累一点成长值。"],
+        ["旅行", totals.travelPoints, "旅行任务和旅行账单都会累计经验值。"]
+      ].map(([name, value, note]) => `
+        <article class="entry-item">
+          <div class="entry-main">
+            <strong>${name}</strong>
+            <span class="muted">${note}</span>
+          </div>
+          <div class="cost">${value} XP</div>
+        </article>
+      `).join("")}
     </div>
   `;
-
-  refs.roomStatus.innerHTML = `
-    <div class="media-columns">
-      <div class="media-list">
-        <p class="mini-title">书架</p>
-        ${renderMediaList(books, "还没有想看的书，先放一本到架子上吧。")}
-      </div>
-      <div class="media-list">
-        <p class="mini-title">DVD 架</p>
-        ${renderMediaList(movies, "还没有想看的电影，先放一部进去吧。")}
-      </div>
-    </div>
-  `;
-}
-
-function renderShelfSpines(items, type) {
-  if (!items.length) {
-    return type === "book"
-      ? '<div class="book-spine">待放</div><div class="book-spine">新书</div><div class="book-spine">故事</div>'
-      : '<div class="dvd-spine">待看</div><div class="dvd-spine">电影</div>';
-  }
-  return items.map((item) => `
-    <div class="${type === "book" ? "book-spine" : "dvd-spine"} ${item.done ? "done" : ""}" title="${escapeHtml(item.title)}">
-      ${escapeHtml(item.title.slice(0, type === "book" ? 4 : 8))}
-    </div>
-  `).join("");
-}
-
-function renderMediaList(items, emptyText) {
-  if (!items.length) {
-    return `<div class="media-empty">${emptyText}</div>`;
-  }
-  return items.slice().reverse().map((item) => `
-    <article class="media-item">
-      <div class="media-item-top">
-        <div>
-          <strong>${escapeHtml(item.title)}</strong>
-          <div class="muted">${item.note ? escapeHtml(item.note) : "先放在架子上，等以后实现。"}</div>
-        </div>
-        <span class="tag">${item.done ? "已看完" : "想看"}</span>
-      </div>
-      <div class="media-actions">
-        <button class="tiny-btn" type="button" data-toggle-media="${item.id}">${item.done ? "标回想看" : "标记已看"}</button>
-        <button class="tiny-btn danger-btn" type="button" data-remove-media="${item.id}">删除</button>
-      </div>
-    </article>
-  `).join("");
 }
 
 function applySeasonTheme() {
@@ -527,6 +559,58 @@ function applySeasonTheme() {
   if (themeMeta) {
     themeMeta.content = getComputedStyle(document.body).getPropertyValue("--accent").trim() || themeMeta.content;
   }
+}
+
+function onExpensePanelClick(event) {
+  const button = event.target.closest("[data-expense-range]");
+  if (!button) return;
+  activeExpenseStatsRange = button.dataset.expenseRange;
+  renderExpenses();
+}
+
+function collectSocialEntries() {
+  return Object.entries(state.days).flatMap(([date, day]) =>
+    (day.socials || []).map((item) => ({ ...item, date: item.date || date }))
+  );
+}
+
+function filterEntriesByRange(items, range, anchorDate) {
+  const anchor = parseDate(anchorDate);
+  return items.filter((item) => isDateInRange(item.date, range, anchor));
+}
+
+function isDateInRange(dateString, range, anchorDate) {
+  const target = parseDate(dateString);
+  if (range === "year") {
+    return target.getFullYear() === anchorDate.getFullYear();
+  }
+  if (range === "month") {
+    return target.getFullYear() === anchorDate.getFullYear() && target.getMonth() === anchorDate.getMonth();
+  }
+  const start = new Date(anchorDate);
+  const day = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - day);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7);
+  return target >= start && target < end;
+}
+
+function rangeLabel(range) {
+  return range === "week" ? "本周" : range === "month" ? "本月" : "今年";
+}
+
+function countBy(items, key) {
+  return items.reduce((acc, item) => {
+    const value = item[key] || "未分类";
+    acc[value] = (acc[value] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function topCountLabel(map) {
+  const [name, count] = Object.entries(map).sort((a, b) => b[1] - a[1])[0] || ["暂无", 0];
+  return `${name} · ${count}`;
 }
 
 function renderInstallStatus() {
@@ -803,39 +887,6 @@ function onSubmitReward(event) {
   render();
 }
 
-function onSubmitMedia(event) {
-  event.preventDefault();
-  const title = refs.mediaTitle.value.trim();
-  if (!title) return;
-  state.media.push({
-    id: uid(),
-    type: refs.mediaType.value,
-    title,
-    note: refs.mediaNote.value.trim(),
-    done: false
-  });
-  refs.mediaForm.reset();
-  saveState();
-  render();
-}
-
-function onMediaClick(event) {
-  const toggle = event.target.closest("[data-toggle-media]");
-  if (toggle) {
-    const item = state.media.find((entry) => entry.id === toggle.dataset.toggleMedia);
-    if (!item) return;
-    item.done = !item.done;
-    saveState();
-    render();
-    return;
-  }
-  const remove = event.target.closest("[data-remove-media]");
-  if (!remove) return;
-  state.media = state.media.filter((entry) => entry.id !== remove.dataset.removeMedia);
-  saveState();
-  render();
-}
-
 function onRewardClick(event) {
   const redeem = event.target.closest("[data-redeem]");
   if (redeem) {
@@ -986,7 +1037,7 @@ function computeTotals() {
   totals.travelPoints += state.expenses.filter((item) => item.book === "travel").length * 4 + state.trips.length * 10;
   totals.lifePoints += state.ideas.filter((item) => item.bucket === "daily" && item.doneDates.length > 0).length * 3;
   totals.travelPoints += state.ideas.filter((item) => item.bucket === "travel" && item.doneDates.length > 0).length * 3;
-  totals.shelfPoints = state.media.length * 6 + state.media.filter((item) => item.done).length * 4;
+  totals.shelfPoints = state.ideas.filter((item) => item.bucket === "book" || item.bucket === "movie").length * 2;
   totals.roomPoints = totals.lifePoints + totals.moneyPoints + totals.socialPoints + totals.travelPoints + totals.ritualPoints + totals.shelfPoints;
 
   const spent = state.redemptions.reduce((sum, item) => sum + item.cost, 0);
@@ -1081,6 +1132,18 @@ function saveState() {
 }
 
 function normalizeState(parsed) {
+  const mergedIdeas = [...(parsed.ideas || [])];
+  (parsed.media || []).forEach((item) => {
+    const bucket = item.type === "movie" ? "movie" : "book";
+    if (!mergedIdeas.some((idea) => idea.title === item.title && idea.bucket === bucket)) {
+      mergedIdeas.push({
+        id: item.id || uid(),
+        title: item.title,
+        bucket,
+        doneDates: item.done ? [todayISO()] : []
+      });
+    }
+  });
   const normalized = {
     meta: {
       lastSavedAt: parsed?.meta?.lastSavedAt || Date.now(),
@@ -1090,7 +1153,7 @@ function normalizeState(parsed) {
     rewards: parsed.rewards?.length ? parsed.rewards : DEFAULT_REWARDS,
     redemptions: parsed.redemptions || [],
     days: parsed.days || {},
-    ideas: parsed.ideas || [],
+    ideas: mergedIdeas,
     trips: parsed.trips || [],
     expenses: parsed.expenses || [],
     media: parsed.media || []
