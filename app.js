@@ -202,7 +202,7 @@ function enhanceRitualScreen() {
     </form>
     <div class="focus-summary" id="wake-summary"></div>
   `;
-  ritualPanel.append(wakeCard);
+  ritualPanel.insertBefore(wakeCard, firstCard);
   refs.wakeForm = $("#wake-form");
   refs.wakeTime = $("#wake-time");
   refs.wakeJournal = $("#wake-journal");
@@ -407,6 +407,9 @@ function renderTodayTasks() {
 }
 
 function renderTaskDetailField(task, day) {
+  if (day.completedTaskIds.includes(task.id)) {
+    return "";
+  }
   const config = TASK_DETAIL_CONFIG[task.id];
   if (!config) {
     return "";
@@ -614,56 +617,62 @@ function renderExpenseStats() {
 function renderTrips() {
   refs.tripList.innerHTML = state.trips.slice().reverse().map((trip) => {
     const expenses = state.expenses.filter((item) => item.tripId === trip.id);
+    const completedCount = trip.tasks.filter((item) => item.done).length;
     return `
       <article class="trip-item">
-        <div class="trip-card-inner">
-          <div class="trip-main">
-            <strong>${escapeHtml(trip.name)}</strong>
-            <div class="trip-meta">
-              ${trip.company ? `<span class="tag">和 ${escapeHtml(trip.company)} 一起</span>` : ""}
-              <span class="tag">${trip.start || "未填开始"}</span>
-              <span class="tag">${trip.end || "未填结束"}</span>
-              <span class="tag">${trip.tasks.filter((item) => item.done).length}/${trip.tasks.length} 项任务</span>
-              <span class="tag">${formatCurrency(sumAmount(expenses))}</span>
+        <details class="trip-details">
+          <summary class="trip-summary">
+            <div class="trip-main">
+              <strong>${escapeHtml(trip.name)}</strong>
+              <div class="trip-meta">
+                ${trip.company ? `<span class="tag">和 ${escapeHtml(trip.company)} 一起</span>` : ""}
+                <span class="tag">${trip.start || "未填开始"}</span>
+                <span class="tag">${trip.end || "未填结束"}</span>
+                <span class="tag">${completedCount}/${trip.tasks.length} 项任务</span>
+                <span class="tag">${formatCurrency(sumAmount(expenses))}</span>
+              </div>
             </div>
-          </div>
-          <section class="trip-section">
-            <h4>旅行任务</h4>
-            <div class="idea-list">
-              ${trip.tasks.map((task) => `
-                <label class="idea-item">
-                  <span>
-                    <input class="idea-check" type="checkbox" data-trip-id="${trip.id}" data-trip-task-id="${task.id}" ${task.done ? "checked" : ""}>
-                    ${escapeHtml(task.title)}
-                  </span>
-                  <button class="tiny-btn danger-btn" type="button" data-remove-trip-task="${trip.id}|${task.id}">删除</button>
+            <span class="trip-toggle">展开</span>
+          </summary>
+          <div class="trip-card-inner">
+            <section class="trip-section">
+              <h4>旅行任务</h4>
+              <div class="idea-list">
+                ${trip.tasks.map((task) => `
+                  <label class="idea-item">
+                    <span>
+                      <input class="idea-check" type="checkbox" data-trip-id="${trip.id}" data-trip-task-id="${task.id}" ${task.done ? "checked" : ""}>
+                      ${escapeHtml(task.title)}
+                    </span>
+                    <button class="tiny-btn danger-btn" type="button" data-remove-trip-task="${trip.id}|${task.id}">删除</button>
+                  </label>
+                `).join("")}
+              </div>
+              <form class="quick-form" data-trip-task-form="${trip.id}">
+                <label class="field field-full">
+                  <span>新增任务</span>
+                  <input name="tripTaskTitle" type="text" maxlength="30" placeholder="比如：收拾行李 / 去看夜景">
                 </label>
-              `).join("")}
-            </div>
-            <form class="quick-form" data-trip-task-form="${trip.id}">
-              <label class="field field-full">
-                <span>新增任务</span>
-                <input name="tripTaskTitle" type="text" maxlength="30" placeholder="比如：收拾行李 / 去看夜景">
-              </label>
-              <button class="secondary-btn" type="submit">加入任务</button>
-            </form>
-            <button class="tiny-btn" type="button" data-import-ideas="${trip.id}">导入旅行灵感</button>
-          </section>
-          <section class="trip-section">
-            <h4>旅行账单</h4>
-            <div class="entry-list">
-              ${expenses.slice(-3).reverse().map((item) => `
-                <article class="entry-item">
-                  <div class="entry-main">
-                    <strong>${formatCurrency(item.amount)} · ${escapeHtml(item.category)}</strong>
-                    <span class="muted">${item.note ? escapeHtml(item.note) : item.date}</span>
-                  </div>
-                </article>
-              `).join("")}
-            </div>
-          </section>
-          <button class="tiny-btn danger-btn" type="button" data-remove-trip="${trip.id}">删除旅行</button>
-        </div>
+                <button class="secondary-btn" type="submit">加入任务</button>
+              </form>
+              <button class="tiny-btn" type="button" data-import-ideas="${trip.id}">导入旅行灵感</button>
+            </section>
+            <section class="trip-section">
+              <h4>旅行账单</h4>
+              <div class="entry-list">
+                ${expenses.slice(-3).reverse().map((item) => `
+                  <article class="entry-item">
+                    <div class="entry-main">
+                      <strong>${formatCurrency(item.amount)} · ${escapeHtml(item.category)}</strong>
+                      <span class="muted">${item.note ? escapeHtml(item.note) : item.date}</span>
+                    </div>
+                  </article>
+                `).join("")}
+              </div>
+            </section>
+            <button class="tiny-btn danger-btn" type="button" data-remove-trip="${trip.id}">删除旅行</button>
+          </div>
+        </details>
       </article>
     `;
   }).join("");
@@ -1847,5 +1856,5 @@ function formatDateTime(timestamp) {
 
 function coinMarkup(amount, signed = false) {
   const prefix = signed && amount > 0 ? "+" : "";
-  return `${prefix}${amount}<span class="coin-inline" aria-hidden="true"></span>`;
+  return `${prefix}${amount}<span class="coin-inline" aria-hidden="true">¥</span>`;
 }
