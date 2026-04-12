@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f18463">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="四季手帐">
+  <title>四季生活手帐</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero-card">
+      <div class="hero-season-copy">
+        <p class="eyebrow" id="season-label">Spring</p>
+        <p class="season-caption" id="season-caption">温柔的季节切换中。</p>
+      </div>
+      <div class="hero-scene" id="hero-scene" aria-hidden="true">
+        <div class="scene-orb"></div>
+        <div class="scene-cloud cloud-a"></div>
+        <div class="scene-cloud cloud-b"></div>
+        <div class="scene-hill hill-a"></div>
+        <div class="scene-hill hill-b"></div>
+        <div class="scene-tree tree-a"></div>
+        <div class="scene-tree tree-b"></div>
+        <div class="scene-decor decor-a"></div>
+        <div class="scene-decor decor-b"></div>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="panel active" data-screen="today">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Today</p>
+            <h2>今日任务</h2>
+          </div>
+          <div class="date-wrap">
+            <button class="mini-btn" id="prev-day" type="button" aria-label="前一天">&lt;</button>
+            <input id="current-date" type="date">
+            <button class="mini-btn" id="next-day" type="button" aria-label="后一天">&gt;</button>
+          </div>
+        </div>
+
+        <div class="stat-grid" id="top-stats"></div>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h3>今日启用任务</h3>
+              <p class="muted">自己决定今天要经营什么。三餐要写吃了什么，健身要写练了什么。</p>
+            </div>
+            <button class="secondary-btn" id="open-task-picker" type="button">启用任务</button>
+          </div>
+          <div class="task-list" id="today-task-list"></div>
+          <div class="full-bonus" id="full-bonus"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h3>社交记录</h3>
+              <p class="muted">快速标签打卡，不需要写很长。</p>
+            </div>
+          </div>
+          <form class="quick-form" id="social-form">
+            <label class="field">
+              <span>和谁</span>
+              <select id="social-person"></select>
+            </label>
+            <label class="field">
+              <span>形式</span>
+              <select id="social-type"></select>
+            </label>
+            <label class="field">
+              <span>感受</span>
+              <select id="social-feeling"></select>
+            </label>
+            <label class="field field-full">
+              <span>备注</span>
+              <input id="social-note" type="text" maxlength="40" placeholder="可选，写一句就好">
+            </label>
+            <button class="primary-btn" type="submit">记录社交</button>
+          </form>
+          <div class="pill-log" id="social-log"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h3>灵感清单</h3>
+              <p class="muted">一些小小的生活任务，也可以挂到旅行里。</p>
+            </div>
+          </div>
+          <form class="quick-form" id="idea-form">
+            <label class="field field-full">
+              <span>新灵感</span>
+              <input id="idea-title" type="text" maxlength="30" placeholder="比如：买一张彩票 / 拍一张夕阳">
+            </label>
+            <label class="field">
+              <span>归属</span>
+              <select id="idea-bucket">
+                <option value="daily">日常灵感</option>
+                <option value="travel">旅行灵感</option>
+              </select>
+            </label>
+            <button class="secondary-btn" type="submit">加入清单</button>
+          </form>
+          <div class="idea-columns">
+            <div>
+              <p class="mini-title">日常</p>
+              <div class="idea-list" id="daily-ideas"></div>
+            </div>
+            <div>
+              <p class="mini-title">旅行</p>
+              <div class="idea-list" id="travel-ideas"></div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel" data-screen="ritual">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Night</p>
+            <h2>睡前仪式</h2>
+          </div>
+          <p class="section-note">记录完成时间和一点文字日记，完成可获得 +20 金币。</p>
+        </div>
+        <article class="card">
+          <form class="quick-form" id="ritual-form">
+            <label class="field">
+              <span>完成时间</span>
+              <input id="ritual-time" type="time">
+            </label>
+            <label class="field field-full">
+              <span>睡前日记</span>
+              <textarea id="ritual-journal" rows="5" placeholder="写一点今天的感受、完成了什么，或者此刻的心情。"></textarea>
+            </label>
+            <button class="primary-btn" type="submit">完成睡前仪式</button>
+          </form>
+          <div class="focus-summary" id="ritual-summary"></div>
+        </article>
+      </section>
+
+      <section class="panel" data-screen="money">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Money</p>
+            <h2>记账</h2>
+          </div>
+          <p class="section-note">日常和旅行分开记，但都能进入统计。</p>
+        </div>
+        <article class="card">
+          <form class="quick-form" id="expense-form">
+            <label class="field">
+              <span>金额</span>
+              <input id="expense-amount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00">
+            </label>
+            <label class="field">
+              <span>分类</span>
+              <select id="expense-category"></select>
+            </label>
+            <label class="field">
+              <span>账本</span>
+              <select id="expense-book">
+                <option value="daily">日常账本</option>
+                <option value="travel">旅行账本</option>
+              </select>
+            </label>
+            <label class="field" id="expense-trip-field">
+              <span>所属旅行</span>
+              <select id="expense-trip"></select>
+            </label>
+            <label class="field field-full">
+              <span>备注</span>
+              <input id="expense-note" type="text" maxlength="40" placeholder="可选备注">
+            </label>
+            <button class="primary-btn" type="submit">记录一笔 +4 金币</button>
+          </form>
+        </article>
+        <article class="card">
+          <div class="tabs-inline">
+            <button class="chip-btn active" type="button" data-book-tab="daily">日常账单</button>
+            <button class="chip-btn" type="button" data-book-tab="travel">旅行账单</button>
+            <button class="chip-btn" type="button" data-book-tab="stats">统计</button>
+          </div>
+          <div class="entry-list" id="expense-panel"></div>
+        </article>
+      </section>
+
+      <section class="panel" data-screen="travel">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Travel</p>
+            <h2>旅行模式</h2>
+          </div>
+          <p class="section-note">一趟旅行就是一个单独的小项目。</p>
+        </div>
+        <article class="card">
+          <form class="quick-form" id="trip-form">
+            <label class="field field-full">
+              <span>旅行名字</span>
+              <input id="trip-name" type="text" maxlength="24" placeholder="比如：上海周末">
+            </label>
+            <label class="field field-full">
+              <span>和谁一起</span>
+              <input id="trip-company" type="text" maxlength="30" placeholder="比如：自己 / 小林 / 家人">
+            </label>
+            <label class="field">
+              <span>开始</span>
+              <input id="trip-start" type="date">
+            </label>
+            <label class="field">
+              <span>结束</span>
+              <input id="trip-end" type="date">
+            </label>
+            <button class="secondary-btn" type="submit">创建旅行档案</button>
+          </form>
+        </article>
+        <div class="trip-list" id="trip-list"></div>
+      </section>
+
+      <section class="panel" data-screen="room">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">Shelf</p>
+            <h2>书架与影碟架</h2>
+          </div>
+          <p class="section-note">把想看的书和电影排进架子里，保留一点期待感。</p>
+        </div>
+        <article class="card install-card">
+          <div class="card-head">
+            <div>
+              <h3>安装与数据安全</h3>
+              <p class="muted">加到手机桌面，并尽量让浏览器把本地数据保存得更稳。</p>
+            </div>
+          </div>
+          <div class="install-status" id="install-status"></div>
+          <div class="install-actions">
+            <button class="primary-btn" id="install-app" type="button">安装到桌面</button>
+            <button class="secondary-btn" id="request-persistence" type="button">启用更稳保存</button>
+            <button class="secondary-btn" id="export-data" type="button">导出备份</button>
+            <button class="secondary-btn" id="import-data" type="button">导入备份</button>
+          </div>
+          <input id="import-file" type="file" accept="application/json" hidden>
+        </article>
+        <article class="room-card">
+          <div class="room-visual" id="room-visual"></div>
+          <div class="room-status" id="room-status"></div>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h3>加入书架 / DVD 架</h3>
+              <p class="muted">先放想看的，之后也可以打勾表示已经看完。</p>
+            </div>
+          </div>
+          <form class="quick-form" id="media-form">
+            <label class="field">
+              <span>类型</span>
+              <select id="media-type">
+                <option value="book">书</option>
+                <option value="movie">电影</option>
+              </select>
+            </label>
+            <label class="field field-full">
+              <span>名字</span>
+              <input id="media-title" type="text" maxlength="40" placeholder="比如：百年孤独 / Perfect Days">
+            </label>
+            <label class="field field-full">
+              <span>备注</span>
+              <input id="media-note" type="text" maxlength="40" placeholder="可选，写作者、导演或想看的原因">
+            </label>
+            <button class="secondary-btn" type="submit">加入架子</button>
+          </form>
+        </article>
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h3>奖励商店</h3>
+              <p class="muted">自己设奖励和价格，随时可改。</p>
+            </div>
+          </div>
+          <form class="quick-form" id="reward-form">
+            <label class="field field-full">
+              <span>奖励名字</span>
+              <input id="reward-name" type="text" maxlength="24" placeholder="比如：一杯奶茶 / 看一部电影">
+            </label>
+            <label class="field">
+              <span>价格</span>
+              <input id="reward-cost" type="number" min="1" step="1" inputmode="numeric" placeholder="60">
+            </label>
+            <button class="secondary-btn" type="submit">加入商店</button>
+          </form>
+          <div class="reward-list" id="reward-list"></div>
+          <div class="entry-list" id="redeem-log"></div>
+        </article>
+      </section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="主导航">
+      <button class="nav-btn active" type="button" data-target="today">今天</button>
+      <button class="nav-btn" type="button" data-target="ritual">睡前</button>
+      <button class="nav-btn" type="button" data-target="money">记账</button>
+      <button class="nav-btn" type="button" data-target="travel">旅行</button>
+      <button class="nav-btn" type="button" data-target="room">架子</button>
+    </nav>
+  </div>
+
+  <dialog class="picker-dialog" id="task-dialog">
+    <form method="dialog" class="picker-body">
+      <div class="card-head">
+        <div>
+          <h3>启用今日任务</h3>
+          <p class="muted">勾选今天想经营的部分。</p>
+        </div>
+        <button class="mini-btn" type="submit">关</button>
+      </div>
+      <div class="template-grid" id="task-template-list"></div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
