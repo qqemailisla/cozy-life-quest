@@ -8,7 +8,10 @@ const SHARE_FILENAME_PREFIX = "cozy-life-quest";
 const SNAPSHOT_LIMIT = 30;
 const CLOUD_STATE_TABLE = "cozy_life_states";
 const SUPABASE_LIBRARY_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-const APP_CLOUD_CONFIG = normalizeCloudConfig(window.COZY_LIFE_CLOUD_CONFIG || {});
+const APP_CLOUD_CONFIG = {
+  url: window.COZY_LIFE_CLOUD_CONFIG?.url || "",
+  anonKey: window.COZY_LIFE_CLOUD_CONFIG?.anonKey || ""
+};
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
