@@ -12,6 +12,7 @@ const APP_CLOUD_CONFIG = {
   url: window.COZY_LIFE_CLOUD_CONFIG?.url || "",
   anonKey: window.COZY_LIFE_CLOUD_CONFIG?.anonKey || ""
 };
+const FIXED_DAILY_TASK_IDS = ["breakfast", "lunch", "dinner", "outfit"];
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
@@ -68,6 +69,7 @@ let cloudBootstrapped = false;
 let supabaseInitPromise = null;
 let cloudConfig = loadCloudConfig();
 let appCloudConfigured = Boolean(APP_CLOUD_CONFIG.url && APP_CLOUD_CONFIG.anonKey);
+let authOtpPending = false;
 const deviceId = getOrCreateDeviceId();
 
 const state = loadState();
@@ -173,39 +175,43 @@ function enhanceLayout() {
 }
 
 function enhanceAuthPanel() {
-  const content = document.querySelector(".content");
-  if (!content || refs.authPanel) return;
+  if (refs.authPanel) return;
   const panel = document.createElement("section");
   panel.className = "auth-panel";
   panel.innerHTML = `
-    <article class="card auth-card" id="auth-card">
-      <div class="card-head">
-        <div>
-          <h3>账号与同步</h3>
-          <p class="muted" id="auth-caption">登录后会自动把你的记录同步到云端。</p>
+    <div class="auth-shell">
+      <article class="card auth-card" id="auth-card">
+        <p class="eyebrow">Cloud Login</p>
+        <h2 class="auth-title">Login to Your Seasonal Journal</h2>
+        <p class="muted" id="auth-caption">Sign in and your journal will sync to your private cloud record.</p>
+        <form class="quick-form" id="auth-form">
+          <label class="field field-full">
+            <span>Email</span>
+            <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email">
+          </label>
+          <button class="primary-btn" id="auth-send-link" type="submit">Send Code</button>
+        </form>
+        <div class="quick-form auth-code-form">
+          <label class="field field-full" id="auth-code-wrap" hidden>
+            <span>Email Code</span>
+            <input id="auth-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Enter 6-digit code">
+          </label>
+          <button class="secondary-btn" id="auth-verify-code" type="button" hidden>Verify and Enter</button>
         </div>
-      </div>
-      <form class="quick-form" id="auth-form">
-        <label class="field field-full">
-          <span>邮箱</span>
-          <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email">
-        </label>
-        <button class="primary-btn" id="auth-send-link" type="submit">发送登录链接</button>
-        <button class="secondary-btn" id="auth-sync-now" type="button">立即同步</button>
-        <button class="secondary-btn" id="auth-sign-out" type="button">退出登录</button>
-      </form>
-      <div class="install-status" id="auth-status"></div>
-    </article>
+        <div class="install-status" id="auth-status"></div>
+      </article>
+    </div>
   `;
-  content.prepend(panel);
+  document.body.append(panel);
   refs.authPanel = panel;
   refs.authCard = $("#auth-card");
   refs.authCaption = $("#auth-caption");
   refs.authForm = $("#auth-form");
   refs.authEmail = $("#auth-email");
   refs.authSendLink = $("#auth-send-link");
-  refs.authSyncNow = $("#auth-sync-now");
-  refs.authSignOut = $("#auth-sign-out");
+  refs.authCodeWrap = $("#auth-code-wrap");
+  refs.authCode = $("#auth-code");
+  refs.authVerifyCode = $("#auth-verify-code");
   refs.authStatus = $("#auth-status");
 }
 
@@ -236,7 +242,7 @@ function enhanceCloudSettings() {
         <input id="cloud-email" type="email" placeholder="you@example.com">
       </label>
       <button class="secondary-btn" id="cloud-save-config" type="submit">保存云端配置</button>
-      <button class="secondary-btn" id="cloud-send-link" type="button">发送登录链接</button>
+      <button class="secondary-btn" id="cloud-send-link" type="button">Send Code</button>
       <button class="secondary-btn" id="cloud-sync-now" type="button">立即同步云端</button>
       <button class="secondary-btn" id="cloud-sign-out" type="button">退出云端账号</button>
     </form>
@@ -440,8 +446,7 @@ function bindEvents() {
   refs.importData.addEventListener("click", () => refs.importFile.click());
   refs.importFile.addEventListener("change", onImportData);
   refs.authForm?.addEventListener("submit", onAuthSendLinkFromPanel);
-  refs.authSyncNow?.addEventListener("click", onCloudSyncNow);
-  refs.authSignOut?.addEventListener("click", onCloudSignOut);
+  refs.authVerifyCode?.addEventListener("click", onVerifyAuthCode);
   refs.cloudConfigForm?.addEventListener("submit", onSaveCloudConfig);
   refs.cloudSendLink?.addEventListener("click", onSendCloudMagicLink);
   refs.cloudSyncNow?.addEventListener("click", onCloudSyncNow);
@@ -496,8 +501,13 @@ function renderTaskTemplates() {
   const day = ensureDay(currentDate);
   refs.taskTemplateList.innerHTML = state.taskTemplates.map((task) => `
     <label class="template-item">
-      <input type="checkbox" data-template-id="${task.id}" ${day.enabledTaskIds.includes(task.id) ? "checked" : ""}>
-      <span>${escapeHtml(task.name)}<br><small>+${task.coins} 金币</small></span>
+      <input
+        type="checkbox"
+        data-template-id="${task.id}"
+        ${day.enabledTaskIds.includes(task.id) ? "checked" : ""}
+        ${FIXED_DAILY_TASK_IDS.includes(task.id) ? "disabled" : ""}
+      >
+      <span>${escapeHtml(task.name)}<br><small>${FIXED_DAILY_TASK_IDS.includes(task.id) ? "固定每日任务 · " : ""}+${task.coins} 金币</small></span>
     </label>
   `).join("");
 }
@@ -986,9 +996,14 @@ function renderAuthPanel() {
   if (!refs.authPanel || !refs.authStatus) return;
   refs.authEmail.value = cloudConfig.email || "";
   const configured = Boolean(cloudConfig.url && cloudConfig.anonKey);
+  const gated = appCloudConfigured && !authSession?.user;
+  refs.authPanel.hidden = !gated;
+  document.body.classList.toggle("auth-locked", gated);
   refs.authCaption.textContent = appCloudConfigured
-    ? "用邮箱登录后，会自动同步到你的专属云端记录。"
-    : "还差最后一步：把 Supabase 的应用配置写进站点后，普通用户就不用再手填技术参数。";
+    ? "Enter the email code to open your synced journal."
+    : "One more step: add the Supabase app config to the site so normal users do not need to enter technical settings.";
+  if (refs.authCodeWrap) refs.authCodeWrap.hidden = !authOtpPending;
+  if (refs.authVerifyCode) refs.authVerifyCode.hidden = !authOtpPending;
 
   refs.authStatus.innerHTML = `
     <div class="status-note">
@@ -1006,8 +1021,7 @@ function renderAuthPanel() {
   `;
 
   if (refs.authSendLink) refs.authSendLink.disabled = !configured;
-  if (refs.authSyncNow) refs.authSyncNow.disabled = !configured || !authSession?.user;
-  if (refs.authSignOut) refs.authSignOut.disabled = !authSession?.user;
+  if (refs.authVerifyCode) refs.authVerifyCode.disabled = !configured || !authOtpPending;
 }
 
 function renderRewards() {
@@ -1047,6 +1061,11 @@ function onToggleTemplate(event) {
   if (!input) return;
   const day = ensureDay(currentDate);
   const taskId = input.dataset.templateId;
+  if (FIXED_DAILY_TASK_IDS.includes(taskId)) {
+    input.checked = true;
+    refs.fullBonus.textContent = "Breakfast, lunch, dinner, and outfit stay selected every day.";
+    return;
+  }
   if (input.checked) {
     if (!day.enabledTaskIds.includes(taskId)) day.enabledTaskIds.push(taskId);
   } else {
@@ -1342,6 +1361,7 @@ function ensureDay(date) {
       }
     };
   }
+  let changed = false;
   if (!state.days[date].taskDetails) {
     state.days[date].taskDetails = {};
   }
@@ -1358,6 +1378,15 @@ function ensureDay(date) {
       journal: "",
       completed: false
     };
+  }
+  FIXED_DAILY_TASK_IDS.forEach((taskId) => {
+    if (!state.days[date].enabledTaskIds.includes(taskId)) {
+      state.days[date].enabledTaskIds.push(taskId);
+      changed = true;
+    }
+  });
+  if (changed) {
+    state.days[date].enabledTaskIds = uniqueList(state.days[date].enabledTaskIds);
   }
   return state.days[date];
 }
@@ -1804,6 +1833,7 @@ async function ensureSupabaseClient() {
   supabaseClient.auth.onAuthStateChange((event, session) => {
     authSession = session;
     if (event === "SIGNED_OUT") {
+      authOtpPending = false;
       cloudBootstrapped = false;
       cloudSyncStatus = "已退出云端账号";
       cloudSyncMessage = "本地数据没有丢，云端同步已暂停。";
@@ -1812,6 +1842,7 @@ async function ensureSupabaseClient() {
       return;
     }
     if (session?.user) {
+      authOtpPending = false;
       cloudSyncStatus = "已连接云端账号";
       cloudSyncMessage = `当前账号：${session.user.email || "已登录"}`;
       renderCloudSettings();
@@ -1844,10 +1875,11 @@ async function initCloudSync() {
     if (error) throw error;
     authSession = data.session;
     if (authSession?.user) {
+      authOtpPending = false;
       await bootstrapCloudState("init");
     } else {
       cloudSyncStatus = "已连接，等待登录";
-      cloudSyncMessage = "可以直接发送 magic link 到你的邮箱。";
+      cloudSyncMessage = "可以直接发送验证码到你的邮箱。";
       renderCloudSettings();
       renderAuthPanel();
     }
@@ -2032,10 +2064,10 @@ async function onSaveCloudConfig(event) {
 }
 
 async function onSendCloudMagicLink() {
-  const email = refs.cloudEmail?.value.trim();
+  const email = (refs.authEmail?.value || refs.cloudEmail?.value || cloudConfig.email || "").trim();
   if (!email) {
-    cloudSyncStatus = "请输入登录邮箱";
-    cloudSyncMessage = "登录邮箱会用于发送 magic link。";
+    cloudSyncStatus = "Enter your email";
+    cloudSyncMessage = "We need your email address to send the login code.";
     renderCloudSettings();
     renderAuthPanel();
     return;
@@ -2043,19 +2075,19 @@ async function onSendCloudMagicLink() {
   try {
     const client = await ensureSupabaseClient();
     if (!client) return;
-    const redirectTo = window.location.origin + window.location.pathname;
     const { error } = await client.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: redirectTo }
+      options: { shouldCreateUser: true }
     });
     if (error) throw error;
     cloudConfig.email = email;
     saveCloudConfig(cloudConfig);
-    cloudSyncStatus = "登录链接已发送";
-    cloudSyncMessage = `请去 ${email} 打开登录邮件，回到这个网页后会自动连接云端。`;
+    authOtpPending = true;
+    cloudSyncStatus = "Code sent";
+    cloudSyncMessage = `Check ${email} for the verification code, then enter it here.`;
   } catch (error) {
-    cloudSyncStatus = "发送登录链接失败";
-    cloudSyncMessage = error.message || "请检查 Supabase 配置和邮箱登录设置。";
+    cloudSyncStatus = "Could not send code";
+    cloudSyncMessage = error.message || "Check the Supabase email auth settings.";
   }
   renderCloudSettings();
   renderAuthPanel();
@@ -2073,6 +2105,41 @@ async function onAuthSendLinkFromPanel(event) {
   await onSendCloudMagicLink();
 }
 
+async function onVerifyAuthCode() {
+  const email = (refs.authEmail?.value || cloudConfig.email || "").trim();
+  const code = refs.authCode?.value.trim();
+  if (!email || !code) {
+    cloudSyncStatus = "Enter the code";
+    cloudSyncMessage = "Send the code first, then enter the 6 digits from the email.";
+    renderCloudSettings();
+    renderAuthPanel();
+    return;
+  }
+  try {
+    const client = await ensureSupabaseClient();
+    if (!client) return;
+    const { data, error } = await client.auth.verifyOtp({
+      email,
+      token: code,
+      type: "email"
+    });
+    if (error) throw error;
+    authSession = data.session;
+    authOtpPending = false;
+    if (refs.authCode) refs.authCode.value = "";
+    cloudSyncStatus = "Login successful";
+    cloudSyncMessage = "Loading and merging your cloud record.";
+    renderCloudSettings();
+    renderAuthPanel();
+    await bootstrapCloudState("otp-login");
+  } catch (error) {
+    cloudSyncStatus = "Code verification failed";
+    cloudSyncMessage = error.message || "Please check whether the code is still valid.";
+    renderCloudSettings();
+    renderAuthPanel();
+  }
+}
+
 async function onCloudSyncNow() {
   await bootstrapCloudState("manual");
   renderAuthPanel();
@@ -2085,6 +2152,7 @@ async function onCloudSignOut() {
     }
   } catch {}
   authSession = null;
+  authOtpPending = false;
   cloudBootstrapped = false;
   cloudSyncStatus = "已退出云端账号";
   cloudSyncMessage = "本地数据还在，云端同步会先暂停。";
