@@ -1,9 +1,13 @@
 const STORAGE_KEY = "cozy-life-quest-v1";
 const STORAGE_BACKUP_KEY = "cozy-life-quest-v1-backup";
 const STORAGE_HISTORY_KEY = "cozy-life-quest-v1-history";
+const SUPABASE_CONFIG_KEY = "cozy-life-quest-supabase-config";
+const DEVICE_ID_KEY = "cozy-life-quest-device-id";
 const LEGACY_STORAGE_KEYS = ["cozy-life-quest"];
 const SHARE_FILENAME_PREFIX = "cozy-life-quest";
 const SNAPSHOT_LIMIT = 30;
+const CLOUD_STATE_TABLE = "cozy_life_states";
+const SUPABASE_LIBRARY_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
@@ -50,6 +54,16 @@ let deferredInstallPrompt = null;
 let persistenceStatus = "checking";
 let storageMode = "loading";
 let recoveryNotice = "";
+let supabaseClient = null;
+let authSession = null;
+let cloudSyncStatus = "未配置云同步";
+let cloudSyncMessage = "";
+let cloudSyncTimer = null;
+let cloudSyncInFlight = false;
+let cloudBootstrapped = false;
+let supabaseInitPromise = null;
+let cloudConfig = loadCloudConfig();
+const deviceId = getOrCreateDeviceId();
 
 const state = loadState();
 
@@ -134,6 +148,8 @@ function boot() {
   render();
   hydrateFromIndexedDb();
   refreshPersistenceStatus();
+  renderCloudSettings();
+  initCloudSync().catch(() => {});
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((registration) => {
       registration.update().catch(() => {});
@@ -142,10 +158,56 @@ function boot() {
 }
 
 function enhanceLayout() {
+  enhanceCloudSettings();
   enhanceIdeaSections();
   enhanceRitualScreen();
   enhanceRewardCard();
   enhanceSettingsActions();
+}
+
+function enhanceCloudSettings() {
+  const settingsBody = refs.settingsDialog?.querySelector(".picker-body");
+  if (!settingsBody || refs.cloudPanel) return;
+  const panel = document.createElement("section");
+  panel.className = "cloud-panel";
+  panel.innerHTML = `
+    <div class="card-head">
+      <div>
+        <h3>云端同步</h3>
+        <p class="muted">登录后会把你的整份生活记录同步到 Supabase，每个账号一份。</p>
+      </div>
+    </div>
+    <div class="install-status" id="cloud-sync-status"></div>
+    <form class="quick-form" id="cloud-config-form">
+      <label class="field field-full">
+        <span>Supabase Project URL</span>
+        <input id="cloud-url" type="url" placeholder="https://xxxx.supabase.co">
+      </label>
+      <label class="field field-full">
+        <span>Supabase Anon Key</span>
+        <textarea id="cloud-anon-key" rows="3" placeholder="粘贴 public anon key"></textarea>
+      </label>
+      <label class="field field-full">
+        <span>登录邮箱</span>
+        <input id="cloud-email" type="email" placeholder="you@example.com">
+      </label>
+      <button class="secondary-btn" id="cloud-save-config" type="submit">保存云端配置</button>
+      <button class="secondary-btn" id="cloud-send-link" type="button">发送登录链接</button>
+      <button class="secondary-btn" id="cloud-sync-now" type="button">立即同步云端</button>
+      <button class="secondary-btn" id="cloud-sign-out" type="button">退出云端账号</button>
+    </form>
+  `;
+  settingsBody.insertBefore(panel, refs.installStatus);
+  refs.cloudPanel = panel;
+  refs.cloudStatus = $("#cloud-sync-status");
+  refs.cloudConfigForm = $("#cloud-config-form");
+  refs.cloudUrl = $("#cloud-url");
+  refs.cloudAnonKey = $("#cloud-anon-key");
+  refs.cloudEmail = $("#cloud-email");
+  refs.cloudSaveConfig = $("#cloud-save-config");
+  refs.cloudSendLink = $("#cloud-send-link");
+  refs.cloudSyncNow = $("#cloud-sync-now");
+  refs.cloudSignOut = $("#cloud-sign-out");
 }
 
 function enhanceIdeaSections() {
@@ -333,6 +395,10 @@ function bindEvents() {
   refs.shareBackup?.addEventListener("click", onShareBackup);
   refs.importData.addEventListener("click", () => refs.importFile.click());
   refs.importFile.addEventListener("change", onImportData);
+  refs.cloudConfigForm?.addEventListener("submit", onSaveCloudConfig);
+  refs.cloudSendLink?.addEventListener("click", onSendCloudMagicLink);
+  refs.cloudSyncNow?.addEventListener("click", onCloudSyncNow);
+  refs.cloudSignOut?.addEventListener("click", onCloudSignOut);
   window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
   window.addEventListener("appinstalled", onAppInstalled);
 
@@ -840,6 +906,31 @@ function renderInstallStatus() {
   refs.installApp.textContent = isInstalled ? "已安装" : deferredInstallPrompt ? "安装到桌面" : "查看安装方式";
   refs.installApp.disabled = isInstalled;
   refs.restoreBackup.disabled = !backupInfo.available;
+}
+
+function renderCloudSettings() {
+  if (!refs.cloudStatus) return;
+  refs.cloudUrl.value = cloudConfig.url || "";
+  refs.cloudAnonKey.value = cloudConfig.anonKey || "";
+  refs.cloudEmail.value = cloudConfig.email || "";
+  refs.cloudStatus.innerHTML = `
+    <div class="status-note">
+      <strong>同步状态</strong>
+      <span>${cloudSyncStatus}</span>
+    </div>
+    <div class="status-note">
+      <strong>当前账号</strong>
+      <span>${authSession?.user?.email || "还没有登录云端账号"}</span>
+    </div>
+    <div class="status-note">
+      <strong>同步说明</strong>
+      <span>${cloudSyncMessage || "先保存配置，再发送邮箱登录链接。登录成功后会把本地和云端记录合并。"}</span>
+    </div>
+  `;
+  const configured = Boolean(cloudConfig.url && cloudConfig.anonKey);
+  if (refs.cloudSendLink) refs.cloudSendLink.disabled = !configured;
+  if (refs.cloudSyncNow) refs.cloudSyncNow.disabled = !configured || !authSession?.user;
+  if (refs.cloudSignOut) refs.cloudSignOut.disabled = !authSession?.user;
 }
 
 function renderRewards() {
@@ -1364,6 +1455,32 @@ function loadState() {
   }
 }
 
+function loadCloudConfig() {
+  try {
+    const raw = localStorage.getItem(SUPABASE_CONFIG_KEY);
+    if (!raw) return { url: "", anonKey: "", email: "" };
+    return { url: "", anonKey: "", email: "", ...JSON.parse(raw) };
+  } catch {
+    return { url: "", anonKey: "", email: "" };
+  }
+}
+
+function saveCloudConfig(config) {
+  localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify(config));
+}
+
+function getOrCreateDeviceId() {
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const created = uid();
+    localStorage.setItem(DEVICE_ID_KEY, created);
+    return created;
+  } catch {
+    return uid();
+  }
+}
+
 function seedState() {
   return {
     meta: {
@@ -1403,6 +1520,7 @@ function saveState() {
   state.meta.lastSavedAt = Date.now();
   state.meta.version = 2;
   persistSnapshot(state, false);
+  queueCloudSync("local-save");
 }
 
 function normalizeState(parsed) {
@@ -1554,6 +1672,178 @@ async function saveStateToIndexedDb(payload, key = "state") {
   }
 }
 
+async function loadSupabaseLibrary() {
+  if (window.supabase?.createClient) return window.supabase;
+  if (supabaseInitPromise) return supabaseInitPromise;
+  supabaseInitPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-supabase-lib="true"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.supabase), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Supabase 库加载失败")), { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = SUPABASE_LIBRARY_URL;
+    script.async = true;
+    script.dataset.supabaseLib = "true";
+    script.onload = () => resolve(window.supabase);
+    script.onerror = () => reject(new Error("Supabase 库加载失败"));
+    document.head.append(script);
+  });
+  return supabaseInitPromise;
+}
+
+async function ensureSupabaseClient() {
+  if (supabaseClient) return supabaseClient;
+  if (!cloudConfig.url || !cloudConfig.anonKey) {
+    cloudSyncStatus = "请先填写 Supabase 配置";
+    cloudSyncMessage = "需要 Project URL 和 anon key 才能连接。";
+    renderCloudSettings();
+    return null;
+  }
+  const supabase = await loadSupabaseLibrary();
+  supabaseClient = supabase.createClient(cloudConfig.url, cloudConfig.anonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  });
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    authSession = session;
+    if (event === "SIGNED_OUT") {
+      cloudBootstrapped = false;
+      cloudSyncStatus = "已退出云端账号";
+      cloudSyncMessage = "本地数据没有丢，云端同步已暂停。";
+      renderCloudSettings();
+      return;
+    }
+    if (session?.user) {
+      cloudSyncStatus = "已连接云端账号";
+      cloudSyncMessage = `当前账号：${session.user.email || "已登录"}`;
+      renderCloudSettings();
+      bootstrapCloudState(event).catch(() => {});
+    } else {
+      renderCloudSettings();
+    }
+  });
+  return supabaseClient;
+}
+
+async function initCloudSync() {
+  if (!cloudConfig.url || !cloudConfig.anonKey) {
+    cloudSyncStatus = "未配置云端同步";
+    cloudSyncMessage = "把 Supabase Project URL 和 anon key 填进设置后，就能开始同步。";
+    renderCloudSettings();
+    return;
+  }
+  try {
+    cloudSyncStatus = "正在连接 Supabase";
+    cloudSyncMessage = "连接成功后会检查有没有云端旧记录。";
+    renderCloudSettings();
+    const client = await ensureSupabaseClient();
+    if (!client) return;
+    const { data, error } = await client.auth.getSession();
+    if (error) throw error;
+    authSession = data.session;
+    if (authSession?.user) {
+      await bootstrapCloudState("init");
+    } else {
+      cloudSyncStatus = "已连接，等待登录";
+      cloudSyncMessage = "可以直接发送 magic link 到你的邮箱。";
+      renderCloudSettings();
+    }
+  } catch (error) {
+    cloudSyncStatus = "云端连接失败";
+    cloudSyncMessage = error.message || "请检查 Supabase 配置。";
+    renderCloudSettings();
+  }
+}
+
+async function bootstrapCloudState(reason = "manual") {
+  if (!authSession?.user) {
+    cloudSyncStatus = "还没有登录云端账号";
+    cloudSyncMessage = "先发送邮箱登录链接并完成登录。";
+    renderCloudSettings();
+    return;
+  }
+  try {
+    const client = await ensureSupabaseClient();
+    if (!client) return;
+    cloudSyncStatus = "正在读取云端记录";
+    cloudSyncMessage = "会把本地和云端数据做一次合并。";
+    renderCloudSettings();
+    const { data, error } = await client
+      .from(CLOUD_STATE_TABLE)
+      .select("state, updated_at")
+      .eq("user_id", authSession.user.id)
+      .maybeSingle();
+    if (error) throw error;
+
+    if (data?.state) {
+      const merged = mergeSnapshotCandidates([
+        { source: "local-current", payload: state },
+        { source: "cloud-state", payload: data.state }
+      ]);
+      replaceState(merged);
+      persistSnapshot(state, false);
+      render();
+      cloudSyncStatus = "本地和云端已合并";
+      cloudSyncMessage = "更新或换设备时，会优先把两边的记录合并。";
+    } else if (scoreSnapshot(state) > 0) {
+      await pushStateToCloud("bootstrap-empty-cloud");
+      cloudSyncStatus = "已创建第一份云端记录";
+      cloudSyncMessage = "当前本地数据已经上传到你的 Supabase。";
+    } else {
+      cloudSyncStatus = "云端已连接";
+      cloudSyncMessage = "现在还没有记录，等你开始使用后会自动同步。";
+    }
+    cloudBootstrapped = true;
+    renderCloudSettings();
+  } catch (error) {
+    cloudSyncStatus = "读取云端记录失败";
+    cloudSyncMessage = error.message || "请检查数据库表和权限策略。";
+    renderCloudSettings();
+  }
+}
+
+function queueCloudSync(reason = "auto") {
+  if (!authSession?.user || !cloudBootstrapped) return;
+  if (cloudSyncTimer) clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = window.setTimeout(() => {
+    pushStateToCloud(reason).catch(() => {});
+  }, 1200);
+}
+
+async function pushStateToCloud(reason = "manual") {
+  if (!authSession?.user || cloudSyncInFlight) return;
+  try {
+    const client = await ensureSupabaseClient();
+    if (!client) return;
+    cloudSyncInFlight = true;
+    cloudSyncStatus = reason === "manual" ? "正在手动同步云端" : "正在上传到云端";
+    cloudSyncMessage = "这一步会把当前整份状态写进你的 Supabase。";
+    renderCloudSettings();
+    const payload = normalizeState(state);
+    const { error } = await client.from(CLOUD_STATE_TABLE).upsert({
+      user_id: authSession.user.id,
+      state: payload,
+      device_id: deviceId,
+      client_updated_at: new Date(payload.meta?.lastSavedAt || Date.now()).toISOString()
+    }, { onConflict: "user_id" });
+    if (error) throw error;
+    cloudSyncStatus = "云端同步完成";
+    cloudSyncMessage = `最近同步设备：${deviceId.slice(0, 8)}。现在这份数据已经在云端有一份。`;
+    renderCloudSettings();
+  } catch (error) {
+    cloudSyncStatus = "上传云端失败";
+    cloudSyncMessage = error.message || "请检查表结构和 RLS。";
+    renderCloudSettings();
+  } finally {
+    cloudSyncInFlight = false;
+  }
+}
+
 function onBeforeInstallPrompt(event) {
   event.preventDefault();
   deferredInstallPrompt = event;
@@ -1614,6 +1904,69 @@ async function onRequestPersistence() {
     persistenceStatus = "unsupported";
   }
   renderInstallStatus();
+}
+
+async function onSaveCloudConfig(event) {
+  event.preventDefault();
+  cloudConfig = {
+    url: refs.cloudUrl.value.trim(),
+    anonKey: refs.cloudAnonKey.value.trim(),
+    email: refs.cloudEmail.value.trim()
+  };
+  saveCloudConfig(cloudConfig);
+  supabaseClient = null;
+  supabaseInitPromise = null;
+  authSession = null;
+  cloudBootstrapped = false;
+  cloudSyncStatus = cloudConfig.url && cloudConfig.anonKey ? "云端配置已保存，准备连接" : "云端配置未完成";
+  cloudSyncMessage = "配置保存在当前设备里。现在可以发送邮箱登录链接。";
+  renderCloudSettings();
+  await initCloudSync().catch(() => {});
+}
+
+async function onSendCloudMagicLink() {
+  const email = refs.cloudEmail?.value.trim();
+  if (!email) {
+    cloudSyncStatus = "请输入登录邮箱";
+    cloudSyncMessage = "登录邮箱会用于发送 magic link。";
+    renderCloudSettings();
+    return;
+  }
+  try {
+    const client = await ensureSupabaseClient();
+    if (!client) return;
+    const redirectTo = window.location.origin + window.location.pathname;
+    const { error } = await client.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: redirectTo }
+    });
+    if (error) throw error;
+    cloudConfig.email = email;
+    saveCloudConfig(cloudConfig);
+    cloudSyncStatus = "登录链接已发送";
+    cloudSyncMessage = `请去 ${email} 打开登录邮件，回到这个网页后会自动连接云端。`;
+  } catch (error) {
+    cloudSyncStatus = "发送登录链接失败";
+    cloudSyncMessage = error.message || "请检查 Supabase 配置和邮箱登录设置。";
+  }
+  renderCloudSettings();
+}
+
+async function onCloudSyncNow() {
+  await bootstrapCloudState("manual");
+}
+
+async function onCloudSignOut() {
+  try {
+    if (supabaseClient) {
+      await supabaseClient.auth.signOut();
+    }
+  } catch {}
+  authSession = null;
+  cloudBootstrapped = false;
+  cloudSyncStatus = "已退出云端账号";
+  cloudSyncMessage = "本地数据还在，云端同步会先暂停。";
+  renderCloudSettings();
 }
 
 function onSaveNow() {

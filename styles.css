@@ -727,6 +727,12 @@ button {
   padding: 14px;
 }
 
+.cloud-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
 .summary-card span,
 .status-note span {
   display: block;
