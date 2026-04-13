@@ -8,6 +8,7 @@ const SHARE_FILENAME_PREFIX = "cozy-life-quest";
 const SNAPSHOT_LIMIT = 30;
 const CLOUD_STATE_TABLE = "cozy_life_states";
 const SUPABASE_LIBRARY_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+const APP_CLOUD_CONFIG = normalizeCloudConfig(window.COZY_LIFE_CLOUD_CONFIG || {});
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
@@ -63,6 +64,7 @@ let cloudSyncInFlight = false;
 let cloudBootstrapped = false;
 let supabaseInitPromise = null;
 let cloudConfig = loadCloudConfig();
+let appCloudConfigured = Boolean(APP_CLOUD_CONFIG.url && APP_CLOUD_CONFIG.anonKey);
 const deviceId = getOrCreateDeviceId();
 
 const state = loadState();
@@ -148,6 +150,7 @@ function boot() {
   render();
   hydrateFromIndexedDb();
   refreshPersistenceStatus();
+  renderAuthPanel();
   renderCloudSettings();
   initCloudSync().catch(() => {});
   if ("serviceWorker" in navigator) {
@@ -158,11 +161,49 @@ function boot() {
 }
 
 function enhanceLayout() {
+  enhanceAuthPanel();
   enhanceCloudSettings();
   enhanceIdeaSections();
   enhanceRitualScreen();
   enhanceRewardCard();
   enhanceSettingsActions();
+}
+
+function enhanceAuthPanel() {
+  const content = document.querySelector(".content");
+  if (!content || refs.authPanel) return;
+  const panel = document.createElement("section");
+  panel.className = "auth-panel";
+  panel.innerHTML = `
+    <article class="card auth-card" id="auth-card">
+      <div class="card-head">
+        <div>
+          <h3>账号与同步</h3>
+          <p class="muted" id="auth-caption">登录后会自动把你的记录同步到云端。</p>
+        </div>
+      </div>
+      <form class="quick-form" id="auth-form">
+        <label class="field field-full">
+          <span>邮箱</span>
+          <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email">
+        </label>
+        <button class="primary-btn" id="auth-send-link" type="submit">发送登录链接</button>
+        <button class="secondary-btn" id="auth-sync-now" type="button">立即同步</button>
+        <button class="secondary-btn" id="auth-sign-out" type="button">退出登录</button>
+      </form>
+      <div class="install-status" id="auth-status"></div>
+    </article>
+  `;
+  content.prepend(panel);
+  refs.authPanel = panel;
+  refs.authCard = $("#auth-card");
+  refs.authCaption = $("#auth-caption");
+  refs.authForm = $("#auth-form");
+  refs.authEmail = $("#auth-email");
+  refs.authSendLink = $("#auth-send-link");
+  refs.authSyncNow = $("#auth-sync-now");
+  refs.authSignOut = $("#auth-sign-out");
+  refs.authStatus = $("#auth-status");
 }
 
 function enhanceCloudSettings() {
@@ -395,6 +436,9 @@ function bindEvents() {
   refs.shareBackup?.addEventListener("click", onShareBackup);
   refs.importData.addEventListener("click", () => refs.importFile.click());
   refs.importFile.addEventListener("change", onImportData);
+  refs.authForm?.addEventListener("submit", onAuthSendLinkFromPanel);
+  refs.authSyncNow?.addEventListener("click", onCloudSyncNow);
+  refs.authSignOut?.addEventListener("click", onCloudSignOut);
   refs.cloudConfigForm?.addEventListener("submit", onSaveCloudConfig);
   refs.cloudSendLink?.addEventListener("click", onSendCloudMagicLink);
   refs.cloudSyncNow?.addEventListener("click", onCloudSyncNow);
@@ -928,9 +972,39 @@ function renderCloudSettings() {
     </div>
   `;
   const configured = Boolean(cloudConfig.url && cloudConfig.anonKey);
+  if (refs.cloudConfigForm) refs.cloudConfigForm.style.display = appCloudConfigured ? "none" : "grid";
   if (refs.cloudSendLink) refs.cloudSendLink.disabled = !configured;
   if (refs.cloudSyncNow) refs.cloudSyncNow.disabled = !configured || !authSession?.user;
   if (refs.cloudSignOut) refs.cloudSignOut.disabled = !authSession?.user;
+  if (refs.cloudPanel) refs.cloudPanel.classList.toggle("cloud-panel-configured", appCloudConfigured);
+}
+
+function renderAuthPanel() {
+  if (!refs.authPanel || !refs.authStatus) return;
+  refs.authEmail.value = cloudConfig.email || "";
+  const configured = Boolean(cloudConfig.url && cloudConfig.anonKey);
+  refs.authCaption.textContent = appCloudConfigured
+    ? "用邮箱登录后，会自动同步到你的专属云端记录。"
+    : "还差最后一步：把 Supabase 的应用配置写进站点后，普通用户就不用再手填技术参数。";
+
+  refs.authStatus.innerHTML = `
+    <div class="status-note">
+      <strong>登录状态</strong>
+      <span>${authSession?.user?.email || "还没有登录"}</span>
+    </div>
+    <div class="status-note">
+      <strong>同步状态</strong>
+      <span>${cloudSyncStatus}</span>
+    </div>
+    <div class="status-note">
+      <strong>说明</strong>
+      <span>${cloudSyncMessage || "登录后会自动拉取云端数据并在保存时自动同步。"}</span>
+    </div>
+  `;
+
+  if (refs.authSendLink) refs.authSendLink.disabled = !configured;
+  if (refs.authSyncNow) refs.authSyncNow.disabled = !configured || !authSession?.user;
+  if (refs.authSignOut) refs.authSignOut.disabled = !authSession?.user;
 }
 
 function renderRewards() {
@@ -1458,15 +1532,21 @@ function loadState() {
 function loadCloudConfig() {
   try {
     const raw = localStorage.getItem(SUPABASE_CONFIG_KEY);
-    if (!raw) return { url: "", anonKey: "", email: "" };
-    return { url: "", anonKey: "", email: "", ...JSON.parse(raw) };
+    const saved = raw ? JSON.parse(raw) : {};
+    return normalizeCloudConfig(saved);
   } catch {
-    return { url: "", anonKey: "", email: "" };
+    return normalizeCloudConfig({});
   }
 }
 
 function saveCloudConfig(config) {
-  localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify(config));
+  cloudConfig = normalizeCloudConfig(config);
+  localStorage.setItem(SUPABASE_CONFIG_KEY, JSON.stringify({
+    url: cloudConfig.url,
+    anonKey: cloudConfig.anonKey,
+    email: cloudConfig.email
+  }));
+  appCloudConfigured = Boolean(APP_CLOUD_CONFIG.url && APP_CLOUD_CONFIG.anonKey);
 }
 
 function getOrCreateDeviceId() {
@@ -1479,6 +1559,14 @@ function getOrCreateDeviceId() {
   } catch {
     return uid();
   }
+}
+
+function normalizeCloudConfig(input = {}) {
+  return {
+    url: APP_CLOUD_CONFIG.url || input.url || "",
+    anonKey: APP_CLOUD_CONFIG.anonKey || input.anonKey || "",
+    email: input.email || ""
+  };
 }
 
 function seedState() {
@@ -1699,6 +1787,7 @@ async function ensureSupabaseClient() {
     cloudSyncStatus = "请先填写 Supabase 配置";
     cloudSyncMessage = "需要 Project URL 和 anon key 才能连接。";
     renderCloudSettings();
+    renderAuthPanel();
     return null;
   }
   const supabase = await loadSupabaseLibrary();
@@ -1716,15 +1805,18 @@ async function ensureSupabaseClient() {
       cloudSyncStatus = "已退出云端账号";
       cloudSyncMessage = "本地数据没有丢，云端同步已暂停。";
       renderCloudSettings();
+      renderAuthPanel();
       return;
     }
     if (session?.user) {
       cloudSyncStatus = "已连接云端账号";
       cloudSyncMessage = `当前账号：${session.user.email || "已登录"}`;
       renderCloudSettings();
+      renderAuthPanel();
       bootstrapCloudState(event).catch(() => {});
     } else {
       renderCloudSettings();
+      renderAuthPanel();
     }
   });
   return supabaseClient;
@@ -1735,12 +1827,14 @@ async function initCloudSync() {
     cloudSyncStatus = "未配置云端同步";
     cloudSyncMessage = "把 Supabase Project URL 和 anon key 填进设置后，就能开始同步。";
     renderCloudSettings();
+    renderAuthPanel();
     return;
   }
   try {
     cloudSyncStatus = "正在连接 Supabase";
     cloudSyncMessage = "连接成功后会检查有没有云端旧记录。";
     renderCloudSettings();
+    renderAuthPanel();
     const client = await ensureSupabaseClient();
     if (!client) return;
     const { data, error } = await client.auth.getSession();
@@ -1752,11 +1846,13 @@ async function initCloudSync() {
       cloudSyncStatus = "已连接，等待登录";
       cloudSyncMessage = "可以直接发送 magic link 到你的邮箱。";
       renderCloudSettings();
+      renderAuthPanel();
     }
   } catch (error) {
     cloudSyncStatus = "云端连接失败";
     cloudSyncMessage = error.message || "请检查 Supabase 配置。";
     renderCloudSettings();
+    renderAuthPanel();
   }
 }
 
@@ -1765,6 +1861,7 @@ async function bootstrapCloudState(reason = "manual") {
     cloudSyncStatus = "还没有登录云端账号";
     cloudSyncMessage = "先发送邮箱登录链接并完成登录。";
     renderCloudSettings();
+    renderAuthPanel();
     return;
   }
   try {
@@ -1773,6 +1870,7 @@ async function bootstrapCloudState(reason = "manual") {
     cloudSyncStatus = "正在读取云端记录";
     cloudSyncMessage = "会把本地和云端数据做一次合并。";
     renderCloudSettings();
+    renderAuthPanel();
     const { data, error } = await client
       .from(CLOUD_STATE_TABLE)
       .select("state, updated_at")
@@ -1800,10 +1898,12 @@ async function bootstrapCloudState(reason = "manual") {
     }
     cloudBootstrapped = true;
     renderCloudSettings();
+    renderAuthPanel();
   } catch (error) {
     cloudSyncStatus = "读取云端记录失败";
     cloudSyncMessage = error.message || "请检查数据库表和权限策略。";
     renderCloudSettings();
+    renderAuthPanel();
   }
 }
 
@@ -1824,6 +1924,7 @@ async function pushStateToCloud(reason = "manual") {
     cloudSyncStatus = reason === "manual" ? "正在手动同步云端" : "正在上传到云端";
     cloudSyncMessage = "这一步会把当前整份状态写进你的 Supabase。";
     renderCloudSettings();
+    renderAuthPanel();
     const payload = normalizeState(state);
     const { error } = await client.from(CLOUD_STATE_TABLE).upsert({
       user_id: authSession.user.id,
@@ -1835,10 +1936,12 @@ async function pushStateToCloud(reason = "manual") {
     cloudSyncStatus = "云端同步完成";
     cloudSyncMessage = `最近同步设备：${deviceId.slice(0, 8)}。现在这份数据已经在云端有一份。`;
     renderCloudSettings();
+    renderAuthPanel();
   } catch (error) {
     cloudSyncStatus = "上传云端失败";
     cloudSyncMessage = error.message || "请检查表结构和 RLS。";
     renderCloudSettings();
+    renderAuthPanel();
   } finally {
     cloudSyncInFlight = false;
   }
@@ -1921,6 +2024,7 @@ async function onSaveCloudConfig(event) {
   cloudSyncStatus = cloudConfig.url && cloudConfig.anonKey ? "云端配置已保存，准备连接" : "云端配置未完成";
   cloudSyncMessage = "配置保存在当前设备里。现在可以发送邮箱登录链接。";
   renderCloudSettings();
+  renderAuthPanel();
   await initCloudSync().catch(() => {});
 }
 
@@ -1930,6 +2034,7 @@ async function onSendCloudMagicLink() {
     cloudSyncStatus = "请输入登录邮箱";
     cloudSyncMessage = "登录邮箱会用于发送 magic link。";
     renderCloudSettings();
+    renderAuthPanel();
     return;
   }
   try {
@@ -1950,10 +2055,24 @@ async function onSendCloudMagicLink() {
     cloudSyncMessage = error.message || "请检查 Supabase 配置和邮箱登录设置。";
   }
   renderCloudSettings();
+  renderAuthPanel();
+}
+
+async function onAuthSendLinkFromPanel(event) {
+  event.preventDefault();
+  cloudConfig = normalizeCloudConfig({
+    ...cloudConfig,
+    email: refs.authEmail?.value.trim()
+  });
+  saveCloudConfig(cloudConfig);
+  renderCloudSettings();
+  renderAuthPanel();
+  await onSendCloudMagicLink();
 }
 
 async function onCloudSyncNow() {
   await bootstrapCloudState("manual");
+  renderAuthPanel();
 }
 
 async function onCloudSignOut() {
@@ -1967,6 +2086,7 @@ async function onCloudSignOut() {
   cloudSyncStatus = "已退出云端账号";
   cloudSyncMessage = "本地数据还在，云端同步会先暂停。";
   renderCloudSettings();
+  renderAuthPanel();
 }
 
 function onSaveNow() {
