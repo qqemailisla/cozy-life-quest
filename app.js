@@ -194,7 +194,7 @@ function enhanceAuthPanel() {
         <div class="quick-form auth-code-form">
           <label class="field field-full" id="auth-code-wrap" hidden>
             <span>Email Code</span>
-            <input id="auth-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Enter 6-digit code">
+            <input id="auth-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="Enter 8-digit code">
           </label>
           <button class="secondary-btn" id="auth-verify-code" type="button" hidden>Verify and Enter</button>
         </div>
@@ -2110,7 +2110,7 @@ async function onVerifyAuthCode() {
   const code = refs.authCode?.value.trim();
   if (!email || !code) {
     cloudSyncStatus = "Enter the code";
-    cloudSyncMessage = "Send the code first, then enter the 6 digits from the email.";
+    cloudSyncMessage = "Send the code first, then enter the 8 digits from the email.";
     renderCloudSettings();
     renderAuthPanel();
     return;
