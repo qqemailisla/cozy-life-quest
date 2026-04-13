@@ -332,6 +332,8 @@ function enhanceRitualScreen() {
   refs.wakeTime = $("#wake-time");
   refs.wakeJournal = $("#wake-journal");
   refs.wakeSummary = $("#wake-summary");
+  attachRitualFold(firstCard, "睡前仪式", "ritual-fold", "ritual-form", "ritual-summary");
+  attachRitualFold(wakeCard, "起床仪式", "wake-fold", "wake-form", "wake-summary");
   const sectionHead = ritualPanel.querySelector(".section-head");
   if (sectionHead) {
     const title = sectionHead.querySelector("h2");
@@ -343,6 +345,33 @@ function enhanceRitualScreen() {
   }
   const navBtn = document.querySelector('.nav-btn[data-target="ritual"]');
   if (navBtn) navBtn.textContent = "起居";
+}
+
+function attachRitualFold(card, title, foldId, formId, summaryId) {
+  if (!card || card.querySelector(`#${foldId}`)) return;
+  const form = card.querySelector(`#${formId}`);
+  const summary = card.querySelector(`#${summaryId}`);
+  if (!form || !summary) return;
+  const fold = document.createElement("details");
+  fold.className = "ritual-fold";
+  fold.id = foldId;
+  const foldSummary = document.createElement("summary");
+  foldSummary.className = "ritual-fold-summary";
+  foldSummary.innerHTML = `
+    <span>${title}</span>
+    <strong id="${foldId}-state">未完成 ○</strong>
+  `;
+  fold.append(foldSummary);
+  fold.append(form);
+  fold.append(summary);
+  card.append(fold);
+  if (formId === "ritual-form") {
+    refs.ritualFold = fold;
+    refs.ritualFoldState = $(`#${foldId}-state`);
+  } else {
+    refs.wakeFold = fold;
+    refs.wakeFoldState = $(`#${foldId}-state`);
+  }
 }
 
 function enhanceRewardCard() {
@@ -515,21 +544,10 @@ function renderTaskTemplates() {
 function renderTodayTasks() {
   const day = ensureDay(currentDate);
   const enabledTasks = state.taskTemplates.filter((task) => day.enabledTaskIds.includes(task.id));
-  refs.todayTaskList.innerHTML = enabledTasks.map((task) => `
-    <article class="task-item">
-      <div class="task-topline">
-        <label class="task-main">
-          <strong>${escapeHtml(task.name)}</strong>
-          <span class="muted">${escapeHtml(task.note)}</span>
-          <div class="task-tags"><span class="tag">${coinMarkup(task.coins, true)}</span></div>
-        </label>
-        <div class="task-meta">
-          <input class="task-check" type="checkbox" data-task-id="${task.id}" ${day.completedTaskIds.includes(task.id) ? "checked" : ""}>
-        </div>
-      </div>
-      ${renderTaskDetailField(task, day)}
-    </article>
-  `).join("");
+  refs.todayTaskList.innerHTML = enabledTasks.map((task) => day.completedTaskIds.includes(task.id)
+    ? renderCompletedTask(task, day)
+    : renderPendingTask(task, day)
+  ).join("");
   const bonus = getFullBonus(day);
   if (!enabledTasks.length) {
     refs.fullBonus.textContent = "先启用几项今天想做的任务吧。";
@@ -540,6 +558,57 @@ function renderTodayTasks() {
   } else {
     refs.fullBonus.textContent = `已完成 ${day.completedTaskIds.length}/${day.enabledTaskIds.length} 项。全部完成可额外获得 +${bonus.coins} 金币。`;
   }
+}
+
+function renderPendingTask(task, day) {
+  return `
+    <article class="task-item">
+      <div class="task-topline">
+        <label class="task-main">
+          <strong>${escapeHtml(task.name)}</strong>
+          <span class="muted">${escapeHtml(task.note)}</span>
+          <div class="task-tags"><span class="tag">${coinMarkup(task.coins, true)}</span></div>
+        </label>
+        <div class="task-meta">
+          <input class="task-check" type="checkbox" data-task-id="${task.id}">
+        </div>
+      </div>
+      ${renderTaskDetailField(task, day)}
+    </article>
+  `;
+}
+
+function renderCompletedTask(task, day) {
+  const detailText = day.taskDetails?.[task.id] ? `
+    <div class="summary-card">
+      <strong>记录内容</strong>
+      <span>${escapeHtml(day.taskDetails[task.id])}</span>
+    </div>
+  ` : `
+    <div class="summary-card">
+      <strong>无额外内容</strong>
+      <span>这项任务没有填写补充细节。</span>
+    </div>
+  `;
+  return `
+    <details class="task-item task-fold">
+      <summary class="task-fold-summary">
+        <strong>${escapeHtml(task.name)}</strong>
+        <span class="task-done-icon" aria-hidden="true">✓</span>
+      </summary>
+      <div class="task-fold-body">
+        <div class="summary-card">
+          <strong>${escapeHtml(task.note)}</strong>
+          <span>奖励 ${coinMarkup(task.coins, true)}</span>
+        </div>
+        ${detailText}
+        <label class="task-reset-row">
+          <input class="task-check" type="checkbox" data-task-id="${task.id}" checked>
+          <span>取消完成</span>
+        </label>
+      </div>
+    </details>
+  `;
 }
 
 function renderTaskDetailField(task, day) {
@@ -596,21 +665,40 @@ function renderIdeas() {
     book: state.ideas.filter((item) => item.bucket === "book"),
     movie: state.ideas.filter((item) => item.bucket === "movie")
   };
-  refs.dailyIdeas.innerHTML = buckets.daily.map(renderIdeaItem).join("");
-  refs.travelIdeas.innerHTML = buckets.travel.map(renderIdeaItem).join("");
-  refs.bookIdeas.innerHTML = buckets.book.map(renderIdeaItem).join("");
-  refs.movieIdeas.innerHTML = buckets.movie.map(renderIdeaItem).join("");
-  if (refs.dailyIdeasCount) refs.dailyIdeasCount.textContent = String(buckets.daily.length);
-  if (refs.travelIdeasCount) refs.travelIdeasCount.textContent = String(buckets.travel.length);
-  if (refs.bookIdeasCount) refs.bookIdeasCount.textContent = String(buckets.book.length);
-  if (refs.movieIdeasCount) refs.movieIdeasCount.textContent = String(buckets.movie.length);
+  renderIdeaBucket(refs.dailyIdeas, buckets.daily, refs.dailyIdeasCount);
+  renderIdeaBucket(refs.travelIdeas, buckets.travel, refs.travelIdeasCount);
+  renderIdeaBucket(refs.bookIdeas, buckets.book, refs.bookIdeasCount);
+  renderIdeaBucket(refs.movieIdeas, buckets.movie, refs.movieIdeasCount);
 }
 
-function renderIdeaItem(item) {
-  const done = item.doneDates.includes(currentDate);
+function renderIdeaBucket(container, items, counterRef) {
+  const pending = items.filter((item) => !item.doneDates.includes(currentDate));
+  const done = items.filter((item) => item.doneDates.includes(currentDate));
+  if (counterRef) counterRef.textContent = `${done.length}/${items.length}`;
+  if (!container) return;
+  if (!items.length) {
+    container.innerHTML = '<div class="idea-empty muted">还没有内容，先加一条。</div>';
+    return;
+  }
+  container.innerHTML = `
+    <div class="idea-visible-list">
+      ${pending.map((item) => renderIdeaItem(item, false)).join("")}
+    </div>
+    ${done.length ? `
+      <details class="idea-done-fold">
+        <summary>已完成 ${done.length} 项</summary>
+        <div class="idea-list">
+          ${done.map((item) => renderIdeaItem(item, true)).join("")}
+        </div>
+      </details>
+    ` : ""}
+  `;
+}
+
+function renderIdeaItem(item, done) {
   return `
     <article class="idea-item">
-      <label>
+      <label class="${done ? "idea-item-done" : ""}">
         <input class="idea-check" type="checkbox" data-idea-id="${item.id}" ${done ? "checked" : ""}>
         <span>${escapeHtml(item.title)}</span>
       </label>
@@ -654,6 +742,18 @@ function renderRitual() {
       <span>今天的起床小记</span>
     </div>
   `;
+  if (refs.ritualFoldState) {
+    refs.ritualFoldState.textContent = day.ritual.completed ? "已完成 ✓" : "未完成 ○";
+  }
+  if (refs.ritualFold) {
+    refs.ritualFold.open = !day.ritual.completed;
+  }
+  if (refs.wakeFoldState) {
+    refs.wakeFoldState.textContent = day.wake?.completed ? "已完成 ✓" : "未完成 ○";
+  }
+  if (refs.wakeFold) {
+    refs.wakeFold.open = !day.wake?.completed;
+  }
 }
 
 function renderSocialStats(items) {

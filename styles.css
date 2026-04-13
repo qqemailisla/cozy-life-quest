@@ -648,6 +648,47 @@ button {
   font-size: 0.9rem;
 }
 
+.task-fold {
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.task-fold-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.task-fold-summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-done-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--accent) 18%, white);
+  color: var(--accent-deep);
+  font-weight: 800;
+}
+
+.task-fold-body {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.task-reset-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
 .tag,
 .pill {
   display: inline-flex;
@@ -737,6 +778,52 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.idea-empty {
+  padding: 10px 2px;
+}
+
+.idea-visible-list {
+  display: grid;
+  gap: 10px;
+}
+
+.idea-done-fold {
+  margin-top: 8px;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.idea-done-fold summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.idea-item-done span {
+  color: var(--muted);
+}
+
+.ritual-fold {
+  display: grid;
+  gap: 12px;
+}
+
+.ritual-fold-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ritual-fold-summary::-webkit-details-marker {
+  display: none;
 }
 
 .summary-card,
