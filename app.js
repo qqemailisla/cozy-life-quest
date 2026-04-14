@@ -31,10 +31,8 @@ const SOCIAL_PEOPLE = ["朋友", "家人", "同事", "恋爱", "陌生人", "其
 const SOCIAL_TYPES = ["见面", "吃饭", "聊天", "通话", "出游"];
 const SOCIAL_FEELINGS = ["开心", "平静", "被治愈", "疲惫", "尴尬", "普通"];
 const EXPENSE_CATEGORIES = ["超市/网购", "社交聚餐", "交通/日常旅行", "特殊物品", "长途旅行"];
-const DEFAULT_REWARDS = [
-  { id: "r1", name: "一杯奶茶", cost: 30 },
-  { id: "r2", name: "一部电影", cost: 120 }
-];
+const DEFAULT_REWARDS = [];
+const LEGACY_SYSTEM_REWARD_IDS = new Set(["r1", "r2"]);
 const TASK_DETAIL_CONFIG = {
   breakfast: { label: "今天早餐吃了什么", placeholder: "比如：豆浆 + 面包 + 水煮蛋", type: "textarea", required: true },
   lunch: { label: "今天午餐吃了什么", placeholder: "比如：牛肉饭 + 青菜", type: "textarea", required: true },
@@ -672,8 +670,8 @@ function renderIdeas() {
 }
 
 function renderIdeaBucket(container, items, counterRef) {
-  const pending = items.filter((item) => !item.doneDates.includes(currentDate));
-  const done = items.filter((item) => item.doneDates.includes(currentDate));
+  const pending = items.filter((item) => !item.doneDates?.length);
+  const done = items.filter((item) => item.doneDates?.length);
   if (counterRef) counterRef.textContent = `${done.length}/${items.length}`;
   if (!container) return;
   if (!items.length) {
@@ -1126,13 +1124,14 @@ function renderAuthPanel() {
 
 function renderRewards() {
   const totals = computeTotals();
+  const visibleRewards = state.rewards.filter((reward) => !reward.hidden && !isLegacySystemReward(reward));
   if (refs.rewardCoinTotal) {
     refs.rewardCoinTotal.innerHTML = `
       <span class="coin-total-label">现有金币</span>
       <strong>${coinMarkup(totals.availableCoins)}</strong>
     `;
   }
-  refs.rewardList.innerHTML = state.rewards.map((reward) => `
+  refs.rewardList.innerHTML = visibleRewards.map((reward) => `
     <article class="reward-item">
       <div class="reward-main">
         <strong>${escapeHtml(reward.name)}</strong>
@@ -1241,10 +1240,11 @@ function onToggleIdea(event) {
   if (!input) return;
   const idea = state.ideas.find((item) => item.id === input.dataset.ideaId);
   if (!idea) return;
+  if (!Array.isArray(idea.doneDates)) idea.doneDates = [];
   if (input.checked) {
-    if (!idea.doneDates.includes(currentDate)) idea.doneDates.push(currentDate);
+    if (!idea.doneDates.length) idea.doneDates = [currentDate];
   } else {
-    idea.doneDates = idea.doneDates.filter((date) => date !== currentDate);
+    idea.doneDates = [];
   }
   saveState();
   render();
@@ -1378,7 +1378,7 @@ function onSubmitReward(event) {
   const name = refs.rewardName.value.trim();
   const cost = Number(refs.rewardCost.value);
   if (!name || !cost || cost < 1) return;
-  state.rewards.push({ id: uid(), name, cost });
+  state.rewards.push({ id: uid(), name, cost, hidden: false });
   refs.rewardForm.reset();
   saveState();
   render();
@@ -1389,7 +1389,14 @@ function onRewardClick(event) {
   if (redeem) {
     const reward = state.rewards.find((item) => item.id === redeem.dataset.redeem);
     if (!reward || computeTotals().availableCoins < reward.cost) return;
-    state.redemptions.push({ id: uid(), name: reward.name, cost: reward.cost, date: currentDate });
+    reward.hidden = true;
+    state.redemptions.push({
+      id: uid(),
+      rewardId: reward.id,
+      name: reward.name,
+      cost: reward.cost,
+      date: currentDate
+    });
     saveState();
     render();
     return;
@@ -1633,6 +1640,10 @@ function findTrip(id) {
   return state.trips.find((trip) => trip.id === id);
 }
 
+function isLegacySystemReward(reward) {
+  return LEGACY_SYSTEM_REWARD_IDS.has(reward?.id);
+}
+
 function loadState() {
   try {
     const candidates = [
@@ -1744,7 +1755,10 @@ function saveState() {
 }
 
 function normalizeState(parsed) {
-  const mergedIdeas = [...(parsed.ideas || [])];
+  const mergedIdeas = [...(parsed.ideas || [])].map((idea) => ({
+    ...idea,
+    doneDates: Array.isArray(idea.doneDates) ? idea.doneDates : []
+  }));
   (parsed.media || []).forEach((item) => {
     const bucket = item.type === "movie" ? "movie" : "book";
     if (!mergedIdeas.some((idea) => idea.title === item.title && idea.bucket === bucket)) {
@@ -1762,7 +1776,10 @@ function normalizeState(parsed) {
       version: parsed?.meta?.version || 2
     },
     taskTemplates: mergeTaskTemplates(parsed.taskTemplates),
-    rewards: parsed.rewards?.length ? parsed.rewards : DEFAULT_REWARDS,
+    rewards: (parsed.rewards?.length ? parsed.rewards : DEFAULT_REWARDS).map((reward) => ({
+      ...reward,
+      hidden: Boolean(reward.hidden)
+    })),
     redemptions: parsed.redemptions || [],
     days: parsed.days || {},
     ideas: mergedIdeas,
