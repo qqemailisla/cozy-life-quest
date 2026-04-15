@@ -2192,9 +2192,13 @@ async function onSendCloudMagicLink() {
   try {
     const client = await ensureSupabaseClient();
     if (!client) return;
+    const redirectTo = getEmailRedirectTarget();
     const { error } = await client.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: true }
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo: redirectTo
+      }
     });
     if (error) throw error;
     cloudConfig.email = email;
@@ -2282,6 +2286,12 @@ function onSaveNow() {
   saveState();
   recoveryNotice = "已经手动保存当前记录，并同步刷新本地备份。";
   renderInstallStatus();
+}
+
+function getEmailRedirectTarget() {
+  const url = new URL(window.location.href);
+  const clean = `${url.origin}${url.pathname}`;
+  return clean.endsWith("/") ? clean : `${clean}/`;
 }
 
 function onRestoreBackup() {
