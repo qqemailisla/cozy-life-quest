@@ -31,7 +31,8 @@ const DEFAULT_TASKS = [
 const SOCIAL_PEOPLE = ["朋友", "家人", "同事", "恋爱", "陌生人", "其他"];
 const SOCIAL_TYPES = ["见面", "吃饭", "聊天", "通话", "出游"];
 const SOCIAL_FEELINGS = ["开心", "平静", "被治愈", "疲惫", "尴尬", "普通"];
-const EXPENSE_CATEGORIES = ["超市/网购", "社交聚餐", "交通/日常旅行", "特殊物品", "长途旅行"];
+const DAILY_EXPENSE_CATEGORIES = ["超市/网购/洗衣服", "社交聚餐", "短途旅行"];
+const TRAVEL_EXPENSE_CATEGORIES = ["吃饭", "交通", "住宿", "纪念品", "门票"];
 const DEFAULT_REWARDS = [];
 const LEGACY_SYSTEM_REWARD_IDS = new Set(["r1", "r2"]);
 const TASK_DETAIL_CONFIG = {
@@ -148,7 +149,7 @@ function boot() {
   fillSelect(refs.socialPerson, SOCIAL_PEOPLE);
   fillSelect(refs.socialType, SOCIAL_TYPES);
   fillSelect(refs.socialFeeling, SOCIAL_FEELINGS);
-  fillSelect(refs.expenseCategory, EXPENSE_CATEGORIES);
+  fillSelect(refs.expenseCategory, DAILY_EXPENSE_CATEGORIES);
   bindEvents();
   switchScreen(activeScreen);
   render();
@@ -818,6 +819,7 @@ function renderSocialStats(items) {
 }
 
 function renderExpenseTripSelect() {
+  renderExpenseCategorySelect();
   refs.expenseTripField.style.display = refs.expenseBook.value === "travel" ? "grid" : "none";
   if (!state.trips.length) {
     refs.expenseTrip.innerHTML = '<option value="">先创建旅行</option>';
@@ -826,6 +828,19 @@ function renderExpenseTripSelect() {
   refs.expenseTrip.innerHTML = state.trips.map((trip) => `
     <option value="${trip.id}">${escapeHtml(trip.name)}</option>
   `).join("");
+}
+
+function renderExpenseCategorySelect() {
+  const categories = getExpenseCategories(refs.expenseBook.value);
+  const current = refs.expenseCategory.value;
+  fillSelect(refs.expenseCategory, categories);
+  if (categories.includes(current)) {
+    refs.expenseCategory.value = current;
+  }
+}
+
+function getExpenseCategories(book) {
+  return book === "travel" ? TRAVEL_EXPENSE_CATEGORIES : DAILY_EXPENSE_CATEGORIES;
 }
 
 function renderExpenses() {
@@ -844,43 +859,56 @@ function renderExpenses() {
         <strong>${formatCurrency(item.amount)} · ${escapeHtml(item.category)}</strong>
         <span class="muted">${item.date}${item.tripId ? ` · ${escapeHtml(findTrip(item.tripId)?.name || "旅行")}` : ""}${item.note ? ` · ${escapeHtml(item.note)}` : ""}</span>
       </div>
-      <button class="tiny-btn danger-btn" type="button" data-remove-expense="${item.id}">删除</button>
+      <div class="reward-row">
+        <button class="tiny-btn" type="button" data-edit-expense="${item.id}">编辑</button>
+        <button class="tiny-btn danger-btn" type="button" data-remove-expense="${item.id}">删除</button>
+      </div>
     </article>
   `).join("");
 }
 
 function renderExpenseStats() {
-  const all = state.expenses;
-  const weekList = filterEntriesByRange(all, "week", currentDate);
-  const monthList = filterEntriesByRange(all, "month", currentDate);
-  const yearList = filterEntriesByRange(all, "year", currentDate);
-  const currentRangeList = filterEntriesByRange(all, activeExpenseStatsRange, currentDate);
-  const categoryMap = currentRangeList.reduce((acc, item) => {
-    acc[item.category] = (acc[item.category] || 0) + item.amount;
-    return acc;
-  }, {});
+  const daily = state.expenses.filter((item) => item.book === "daily");
+  const weekList = filterEntriesByRange(daily, "week", currentDate);
+  const monthList = filterEntriesByRange(daily, "month", currentDate);
+  const yearList = filterEntriesByRange(daily, "year", currentDate);
+  const tripTotals = state.trips.map((trip) => {
+    const expenses = state.expenses.filter((item) => item.book === "travel" && item.tripId === trip.id);
+    return {
+      id: trip.id,
+      name: trip.name,
+      total: sumAmount(expenses),
+      count: expenses.length
+    };
+  });
 
   refs.expensePanel.innerHTML = `
+    <div class="summary-card">
+      <strong>日常账单</strong>
+      <span>仅统计日常账本（本周 / 本月 / 今年）</span>
+    </div>
     <div class="focus-summary">
       <div class="summary-card"><strong>${formatCurrency(sumAmount(weekList))}</strong><span>本周</span></div>
       <div class="summary-card"><strong>${formatCurrency(sumAmount(monthList))}</strong><span>本月</span></div>
       <div class="summary-card"><strong>${formatCurrency(sumAmount(yearList))}</strong><span>今年</span></div>
     </div>
-    <div class="tabs-inline compact-tabs">
-      <button class="chip-btn ${activeExpenseStatsRange === "week" ? "active" : ""}" type="button" data-expense-range="week">看本周分类</button>
-      <button class="chip-btn ${activeExpenseStatsRange === "month" ? "active" : ""}" type="button" data-expense-range="month">看本月分类</button>
-      <button class="chip-btn ${activeExpenseStatsRange === "year" ? "active" : ""}" type="button" data-expense-range="year">看今年分类</button>
+    <div class="summary-card">
+      <strong>旅行账单总计</strong>
+      <span>按旅行项目分开汇总，不和日常混在一起</span>
     </div>
     <div class="entry-list">
-      ${Object.entries(categoryMap).sort((a, b) => b[1] - a[1]).map(([name, value]) => `
-        <article class="entry-item">
-          <div class="entry-main">
-            <strong>${escapeHtml(name)}</strong>
-            <span class="muted">${rangeLabel(activeExpenseStatsRange)}分类统计</span>
-          </div>
-          <div class="cost">${formatCurrency(value)}</div>
-        </article>
-      `).join("")}
+      ${tripTotals.length
+        ? tripTotals.map((item) => `
+          <article class="entry-item">
+            <div class="entry-main">
+              <strong>${escapeHtml(item.name)}</strong>
+              <span class="muted">${item.count} 笔旅行账单</span>
+            </div>
+            <div class="cost">${formatCurrency(item.total)}</div>
+          </article>
+        `).join("")
+        : '<div class="summary-card"><strong>还没有旅行账单</strong><span>添加旅行账本记录后，这里会出现每个旅行项目总计。</span></div>'
+      }
     </div>
   `;
 }
@@ -995,9 +1023,35 @@ function applySeasonTheme() {
 }
 
 function onExpensePanelClick(event) {
+  const editButton = event.target.closest("[data-edit-expense]");
+  if (editButton) {
+    onEditExpense(editButton.dataset.editExpense);
+    return;
+  }
   const button = event.target.closest("[data-expense-range]");
   if (!button) return;
   activeExpenseStatsRange = button.dataset.expenseRange;
+  renderExpenses();
+}
+
+function onEditExpense(expenseId) {
+  const expense = state.expenses.find((item) => item.id === expenseId);
+  if (!expense) return;
+  const amountInput = window.prompt("修改金额", String(expense.amount));
+  if (amountInput === null) return;
+  const nextAmount = Number(amountInput);
+  if (!nextAmount || nextAmount <= 0) return;
+
+  const categoryHint = getExpenseCategories(expense.book).join(" / ");
+  const categoryInput = window.prompt(`修改分类（可选：${categoryHint}）`, expense.category || "");
+  if (categoryInput === null) return;
+  const noteInput = window.prompt("修改备注（可留空）", expense.note || "");
+  if (noteInput === null) return;
+
+  expense.amount = nextAmount;
+  expense.category = categoryInput.trim() || expense.category;
+  expense.note = noteInput.trim();
+  saveState();
   renderExpenses();
 }
 
@@ -1335,10 +1389,12 @@ function onSubmitExpense(event) {
   const book = refs.expenseBook.value;
   const tripId = book === "travel" ? refs.expenseTrip.value : "";
   if (book === "travel" && !tripId) return;
+  const categories = getExpenseCategories(book);
+  const category = categories.includes(refs.expenseCategory.value) ? refs.expenseCategory.value : (categories[0] || refs.expenseCategory.value);
   state.expenses.push({
     id: uid(),
     amount,
-    category: refs.expenseCategory.value,
+    category,
     book,
     note: refs.expenseNote.value.trim(),
     tripId,
@@ -1346,7 +1402,6 @@ function onSubmitExpense(event) {
     createdAt: Date.now()
   });
   refs.expenseForm.reset();
-  fillSelect(refs.expenseCategory, EXPENSE_CATEGORIES);
   refs.expenseBook.value = "daily";
   renderExpenseTripSelect();
   saveState();
