@@ -12,7 +12,7 @@ const APP_CLOUD_CONFIG = {
   url: window.COZY_LIFE_CLOUD_CONFIG?.url || "",
   anonKey: window.COZY_LIFE_CLOUD_CONFIG?.anonKey || ""
 };
-const FIXED_DAILY_TASK_IDS = ["breakfast", "lunch", "dinner", "outfit"];
+const FIXED_DAILY_TASK_IDS = ["breakfast", "lunch", "dinner", "outfit", "study4h"];
 
 const DEFAULT_TASKS = [
   { id: "breakfast", name: "早餐", coins: 4, note: "认真吃一顿早餐" },
@@ -23,6 +23,7 @@ const DEFAULT_TASKS = [
   { id: "hair", name: "洗头", coins: 4, note: "头发护理完成" },
   { id: "makeup", name: "化妆", coins: 4, note: "认真打理自己" },
   { id: "snack", name: "零食", coins: 4, note: "吃到喜欢的小东西" },
+  { id: "study4h", name: "学习 4h", coins: 20, note: "沉浸学习四小时" },
   { id: "workout", name: "健身", coins: 6, note: "动一动，身体会开心" },
   { id: "laundry", name: "洗衣服", coins: 4, note: "把衣服和生活一起整理好" }
 ];
@@ -166,10 +167,36 @@ function boot() {
 function enhanceLayout() {
   enhanceAuthPanel();
   enhanceCloudSettings();
+  enhanceExtraTaskComposer();
   enhanceIdeaSections();
   enhanceRitualScreen();
   enhanceRewardCard();
   enhanceSettingsActions();
+}
+
+function enhanceExtraTaskComposer() {
+  const todayPanel = document.querySelector('[data-screen="today"]');
+  const taskCard = todayPanel?.querySelector(".card");
+  if (!taskCard || refs.extraTaskForm) return;
+  const form = document.createElement("form");
+  form.className = "quick-form";
+  form.id = "extra-task-form";
+  form.innerHTML = `
+    <label class="field field-full">
+      <span>每日额外任务名称</span>
+      <input id="extra-task-name" type="text" maxlength="28" placeholder="例如：背单词 40 分钟">
+    </label>
+    <label class="field">
+      <span>金币</span>
+      <input id="extra-task-coins" type="number" min="1" step="1" inputmode="numeric" placeholder="8">
+    </label>
+    <button class="secondary-btn" type="submit">添加到今天</button>
+  `;
+  const anchor = taskCard.querySelector("#today-task-list");
+  taskCard.insertBefore(form, anchor);
+  refs.extraTaskForm = $("#extra-task-form");
+  refs.extraTaskName = $("#extra-task-name");
+  refs.extraTaskCoins = $("#extra-task-coins");
 }
 
 function enhanceAuthPanel() {
@@ -426,6 +453,7 @@ function bindEvents() {
   });
   refs.taskTemplateList.addEventListener("change", onToggleTemplate);
   refs.todayTaskList.addEventListener("change", onToggleTask);
+  refs.extraTaskForm?.addEventListener("submit", onSubmitExtraTask);
 
   refs.socialForm.addEventListener("submit", onSubmitSocial);
   refs.socialLog.addEventListener("click", onRemoveEntry);
@@ -541,7 +569,7 @@ function renderTaskTemplates() {
 
 function renderTodayTasks() {
   const day = ensureDay(currentDate);
-  const enabledTasks = state.taskTemplates.filter((task) => day.enabledTaskIds.includes(task.id));
+  const enabledTasks = getEnabledTasksForDay(day);
   refs.todayTaskList.innerHTML = enabledTasks.map((task) => day.completedTaskIds.includes(task.id)
     ? renderCompletedTask(task, day)
     : renderPendingTask(task, day)
@@ -556,6 +584,15 @@ function renderTodayTasks() {
   } else {
     refs.fullBonus.textContent = `已完成 ${day.completedTaskIds.length}/${day.enabledTaskIds.length} 项。全部完成可额外获得 +${bonus.coins} 金币。`;
   }
+}
+
+function getEnabledTasksForDay(day) {
+  const taskMap = new Map();
+  state.taskTemplates.forEach((task) => taskMap.set(task.id, task));
+  (day.extraTasks || []).forEach((task) => taskMap.set(task.id, task));
+  return (day.enabledTaskIds || [])
+    .map((id) => taskMap.get(id))
+    .filter(Boolean);
 }
 
 function renderPendingTask(task, day) {
@@ -1175,6 +1212,27 @@ function onToggleTemplate(event) {
   render();
 }
 
+function onSubmitExtraTask(event) {
+  event.preventDefault();
+  const day = ensureDay(currentDate);
+  const name = refs.extraTaskName?.value.trim();
+  const coins = Number(refs.extraTaskCoins?.value);
+  if (!name || !coins || coins < 1) return;
+  const taskId = `extra-${uid()}`;
+  day.extraTasks.push({
+    id: taskId,
+    name,
+    coins,
+    note: "每日额外任务"
+  });
+  if (!day.enabledTaskIds.includes(taskId)) {
+    day.enabledTaskIds.push(taskId);
+  }
+  refs.extraTaskForm?.reset();
+  saveState();
+  render();
+}
+
 function onToggleTask(event) {
   const input = event.target.closest("[data-task-id]");
   if (!input) return;
@@ -1454,6 +1512,7 @@ function ensureDay(date) {
     state.days[date] = {
       enabledTaskIds: [],
       completedTaskIds: [],
+      extraTasks: [],
       taskDetails: {},
       socials: [],
       ritual: {
@@ -1469,6 +1528,9 @@ function ensureDay(date) {
     };
   }
   let changed = false;
+  if (!Array.isArray(state.days[date].extraTasks)) {
+    state.days[date].extraTasks = [];
+  }
   if (!state.days[date].taskDetails) {
     state.days[date].taskDetails = {};
   }
@@ -1510,10 +1572,7 @@ function getFullBonus(day) {
 
 function computeTodayScore(date) {
   const day = ensureDay(date);
-  const taskCoins = day.completedTaskIds
-    .map((id) => state.taskTemplates.find((task) => task.id === id))
-    .filter(Boolean)
-    .reduce((sum, task) => sum + task.coins, 0);
+  const taskCoins = day.completedTaskIds.reduce((sum, id) => sum + getTaskCoinValue(day, id), 0);
   const fullBonus = getFullBonus(day).earned ? getFullBonus(day).coins : 0;
   const expenseCoins = state.expenses.filter((item) => item.date === date).length * 4;
   const socialCoins = day.socials.length * 3;
@@ -1537,10 +1596,7 @@ function computeTotals() {
   };
 
   Object.values(state.days).forEach((day) => {
-    const taskCoins = day.completedTaskIds
-      .map((id) => state.taskTemplates.find((task) => task.id === id))
-      .filter(Boolean)
-      .reduce((sum, task) => sum + task.coins, 0);
+    const taskCoins = day.completedTaskIds.reduce((sum, id) => sum + getTaskCoinValue(day, id), 0);
     const fullBonus = getFullBonus(day).earned ? getFullBonus(day).coins : 0;
     totals.totalCoins += taskCoins + fullBonus + day.socials.length * 3 + (day.ritual.completed ? 20 : 0) + (day.wake?.completed ? 20 : 0);
     totals.lifePoints += day.completedTaskIds.length * 5 + fullBonus;
@@ -1569,6 +1625,13 @@ function computeTotals() {
   const spent = state.redemptions.reduce((sum, item) => sum + item.cost, 0);
   totals.availableCoins = Math.max(totals.totalCoins - spent, 0);
   return totals;
+}
+
+function getTaskCoinValue(day, taskId) {
+  const templateTask = state.taskTemplates.find((task) => task.id === taskId);
+  if (templateTask) return Number(templateTask.coins || 0);
+  const extraTask = (day.extraTasks || []).find((task) => task.id === taskId);
+  return Number(extraTask?.coins || 0);
 }
 
 function computeRitualStreak() {
@@ -1835,6 +1898,12 @@ function normalizeDay(day) {
   return {
     enabledTaskIds: (day?.enabledTaskIds || []).map(remapTaskId).filter(Boolean),
     completedTaskIds: (day?.completedTaskIds || []).map(remapTaskId).filter(Boolean),
+    extraTasks: (day?.extraTasks || []).map((task) => ({
+      id: task.id || `extra-${uid()}`,
+      name: task.name || "额外任务",
+      coins: Number(task.coins || 0),
+      note: task.note || "每日额外任务"
+    })),
     taskDetails: day?.taskDetails || {},
     socials: day?.socials || [],
     ritual: {
@@ -2524,6 +2593,7 @@ function mergeDayRecords(baseDay, nextDay) {
   return {
     enabledTaskIds: uniqueList([...base.enabledTaskIds, ...incoming.enabledTaskIds]),
     completedTaskIds: uniqueList([...base.completedTaskIds, ...incoming.completedTaskIds]),
+    extraTasks: mergeUniqueEntries([...(base.extraTasks || []), ...(incoming.extraTasks || [])], (item) => item.id || `${item.name}|${item.coins}`),
     taskDetails: mergeTaskDetails(base.taskDetails, incoming.taskDetails),
     socials: mergeUniqueEntries([...(base.socials || []), ...(incoming.socials || [])], (item) => item.id || `${item.date || ""}|${item.person}|${item.type}|${item.feeling}|${item.note || ""}`),
     ritual: mergeRitualEntry(base.ritual, incoming.ritual),
