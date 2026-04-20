@@ -910,7 +910,10 @@ function renderExpenseStats() {
           <details class="idea-done-fold">
             <summary>${escapeHtml(item.name)} · ${item.count} 笔 · ${formatCurrency(item.total)}</summary>
             <div class="entry-list">
-              ${renderExpenseDetailList(state.expenses.filter((expense) => expense.book === "travel" && expense.tripId === item.id))}
+              ${renderExpenseCategorySections(
+                state.expenses.filter((expense) => expense.book === "travel" && expense.tripId === item.id),
+                "travel"
+              )}
             </div>
           </details>
         `).join("")
@@ -934,8 +937,40 @@ function renderExpenseDetailGroup(title, items) {
       <strong>${title}</strong>
       <span>${items.length} 笔 · ${formatCurrency(sumAmount(items))}</span>
     </article>
-    ${renderExpenseDetailList(items)}
+    ${renderExpenseCategorySections(items, "daily")}
   `;
+}
+
+function renderExpenseCategorySections(items, book) {
+  if (!items.length) {
+    return '<div class="summary-card"><strong>暂无明细</strong><span>这里会显示账单细节。</span></div>';
+  }
+  const grouped = items.reduce((acc, item) => {
+    const key = item.category || "未分类";
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(item);
+    return acc;
+  }, {});
+  const order = getExpenseCategories(book);
+  const categories = [
+    ...order.filter((name) => grouped[name]),
+    ...Object.keys(grouped)
+      .filter((name) => !order.includes(name))
+      .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
+  ];
+
+  return categories.map((category) => {
+    const list = grouped[category];
+    return `
+      <article class="summary-card">
+        <strong>${escapeHtml(category)}</strong>
+        <span>${list.length} 笔 · ${formatCurrency(sumAmount(list))}</span>
+      </article>
+      ${renderExpenseDetailList(list)}
+    `;
+  }).join("");
 }
 
 function renderExpenseDetailList(items) {
