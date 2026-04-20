@@ -892,6 +892,14 @@ function renderExpenseStats() {
       <div class="summary-card"><strong>${formatCurrency(sumAmount(monthList))}</strong><span>本月</span></div>
       <div class="summary-card"><strong>${formatCurrency(sumAmount(yearList))}</strong><span>今年</span></div>
     </div>
+    <details class="idea-done-fold">
+      <summary>查看日常账单明细</summary>
+      <div class="entry-list">
+        ${renderExpenseDetailGroup("本周", weekList)}
+        ${renderExpenseDetailGroup("本月", monthList)}
+        ${renderExpenseDetailGroup("今年", yearList)}
+      </div>
+    </details>
     <div class="summary-card">
       <strong>旅行账单总计</strong>
       <span>按旅行项目分开汇总，不和日常混在一起</span>
@@ -899,18 +907,52 @@ function renderExpenseStats() {
     <div class="entry-list">
       ${tripTotals.length
         ? tripTotals.map((item) => `
-          <article class="entry-item">
-            <div class="entry-main">
-              <strong>${escapeHtml(item.name)}</strong>
-              <span class="muted">${item.count} 笔旅行账单</span>
+          <details class="idea-done-fold">
+            <summary>${escapeHtml(item.name)} · ${item.count} 笔 · ${formatCurrency(item.total)}</summary>
+            <div class="entry-list">
+              ${renderExpenseDetailList(state.expenses.filter((expense) => expense.book === "travel" && expense.tripId === item.id))}
             </div>
-            <div class="cost">${formatCurrency(item.total)}</div>
-          </article>
+          </details>
         `).join("")
         : '<div class="summary-card"><strong>还没有旅行账单</strong><span>添加旅行账本记录后，这里会出现每个旅行项目总计。</span></div>'
       }
     </div>
   `;
+}
+
+function renderExpenseDetailGroup(title, items) {
+  if (!items.length) {
+    return `
+      <article class="summary-card">
+        <strong>${title}</strong>
+        <span>没有记录</span>
+      </article>
+    `;
+  }
+  return `
+    <article class="summary-card">
+      <strong>${title}</strong>
+      <span>${items.length} 笔 · ${formatCurrency(sumAmount(items))}</span>
+    </article>
+    ${renderExpenseDetailList(items)}
+  `;
+}
+
+function renderExpenseDetailList(items) {
+  if (!items.length) {
+    return '<div class="summary-card"><strong>暂无明细</strong><span>这里会显示账单细节。</span></div>';
+  }
+  return items
+    .slice()
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((item) => `
+      <article class="entry-item">
+        <div class="entry-main">
+          <strong>${formatCurrency(item.amount)} · ${escapeHtml(item.category)}</strong>
+          <span class="muted">${item.date}${item.note ? ` · ${escapeHtml(item.note)}` : ""}</span>
+        </div>
+      </article>
+    `).join("");
 }
 
 function renderTrips() {
@@ -1042,14 +1084,24 @@ function onEditExpense(expenseId) {
   const nextAmount = Number(amountInput);
   if (!nextAmount || nextAmount <= 0) return;
 
-  const categoryHint = getExpenseCategories(expense.book).join(" / ");
-  const categoryInput = window.prompt(`修改分类（可选：${categoryHint}）`, expense.category || "");
+  const categories = getExpenseCategories(expense.book);
+  const categoryHint = categories.map((item, index) => `${index + 1}. ${item}`).join("\n");
+  const categoryInput = window.prompt(`修改分类（输入编号或完整名称）\n${categoryHint}`, expense.category || "");
   if (categoryInput === null) return;
   const noteInput = window.prompt("修改备注（可留空）", expense.note || "");
   if (noteInput === null) return;
 
+  const trimmedCategory = categoryInput.trim();
+  const categoryIndex = Number(trimmedCategory);
+  let nextCategory = expense.category;
+  if (Number.isInteger(categoryIndex) && categoryIndex >= 1 && categoryIndex <= categories.length) {
+    nextCategory = categories[categoryIndex - 1];
+  } else if (categories.includes(trimmedCategory)) {
+    nextCategory = trimmedCategory;
+  }
+
   expense.amount = nextAmount;
-  expense.category = categoryInput.trim() || expense.category;
+  expense.category = nextCategory;
   expense.note = noteInput.trim();
   saveState();
   renderExpenses();
