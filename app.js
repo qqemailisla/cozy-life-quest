@@ -8,6 +8,7 @@ const SHARE_FILENAME_PREFIX = "cozy-life-quest";
 const SNAPSHOT_LIMIT = 30;
 const CLOUD_STATE_TABLE = "cozy_life_states";
 const SUPABASE_LIBRARY_URL = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+const CLOUD_PULL_COOLDOWN_MS = 20000;
 const APP_CLOUD_CONFIG = {
   url: window.COZY_LIFE_CLOUD_CONFIG?.url || "",
   anonKey: window.COZY_LIFE_CLOUD_CONFIG?.anonKey || ""
@@ -66,6 +67,8 @@ let cloudSyncMessage = "";
 let cloudSyncTimer = null;
 let cloudSyncInFlight = false;
 let cloudBootstrapped = false;
+let cloudPullTimer = null;
+let lastCloudPullAt = 0;
 let supabaseInitPromise = null;
 let cloudConfig = loadCloudConfig();
 let appCloudConfigured = Boolean(APP_CLOUD_CONFIG.url && APP_CLOUD_CONFIG.anonKey);
@@ -509,6 +512,8 @@ function bindEvents() {
   refs.cloudSignOut?.addEventListener("click", onCloudSignOut);
   window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
   window.addEventListener("appinstalled", onAppInstalled);
+  document.addEventListener("visibilitychange", onVisibilitySync);
+  window.addEventListener("focus", onFocusSync);
 
   refs.rewardForm.addEventListener("submit", onSubmitReward);
   refs.rewardList.addEventListener("click", onRewardClick);
@@ -968,7 +973,6 @@ function renderExpenseCategorySections(items, book) {
         <strong>${escapeHtml(category)}</strong>
         <span>${list.length} 笔 · ${formatCurrency(sumAmount(list))}</span>
       </article>
-      ${renderExpenseDetailList(list)}
     `;
   }).join("");
 }
@@ -1138,6 +1142,7 @@ function onEditExpense(expenseId) {
   expense.amount = nextAmount;
   expense.category = nextCategory;
   expense.note = noteInput.trim();
+  expense.updatedAt = Date.now();
   saveState();
   renderExpenses();
 }
@@ -1486,7 +1491,8 @@ function onSubmitExpense(event) {
     note: refs.expenseNote.value.trim(),
     tripId,
     date: currentDate,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    updatedAt: Date.now()
   });
   refs.expenseForm.reset();
   refs.expenseBook.value = "daily";
@@ -1989,7 +1995,7 @@ function normalizeState(parsed) {
     days: parsed.days || {},
     ideas: mergedIdeas,
     trips: parsed.trips || [],
-    expenses: parsed.expenses || [],
+    expenses: (parsed.expenses || []).map(normalizeExpense),
     media: parsed.media || []
   };
   Object.keys(normalized.days).forEach((date) => {
@@ -2278,6 +2284,17 @@ function queueCloudSync(reason = "auto") {
   }, 1200);
 }
 
+function queueCloudPull(reason = "auto-pull") {
+  if (!authSession?.user || !cloudBootstrapped) return;
+  const now = Date.now();
+  if (now - lastCloudPullAt < CLOUD_PULL_COOLDOWN_MS) return;
+  lastCloudPullAt = now;
+  if (cloudPullTimer) clearTimeout(cloudPullTimer);
+  cloudPullTimer = window.setTimeout(() => {
+    bootstrapCloudState(reason).catch(() => {});
+  }, 600);
+}
+
 async function pushStateToCloud(reason = "manual") {
   if (!authSession?.user || cloudSyncInFlight) return;
   try {
@@ -2475,6 +2492,16 @@ async function onVerifyAuthCode() {
 async function onCloudSyncNow() {
   await bootstrapCloudState("manual");
   renderAuthPanel();
+}
+
+function onVisibilitySync() {
+  if (document.visibilityState === "visible") {
+    queueCloudPull("visibility");
+  }
+}
+
+function onFocusSync() {
+  queueCloudPull("focus");
 }
 
 async function onCloudSignOut() {
@@ -2715,7 +2742,7 @@ function mergeStates(base, incoming) {
     days: mergeDayMaps(merged.days || {}, next.days || {}),
     ideas: mergeIdeas(merged.ideas || [], next.ideas || []),
     trips: mergeTrips(merged.trips || [], next.trips || []),
-    expenses: mergeUniqueEntries([...(merged.expenses || []), ...(next.expenses || [])], (item) => item.id || `${item.date}|${item.amount}|${item.category}|${item.note || ""}|${item.tripId || ""}`),
+    expenses: mergeExpenses(merged.expenses || [], next.expenses || []),
     media: mergeUniqueEntries([...(merged.media || []), ...(next.media || [])], (item) => item.id || `${item.type || ""}|${item.title || ""}`)
   });
 }
@@ -2836,6 +2863,48 @@ function mergeTripTasks(baseTasks, nextTasks) {
       done: Boolean(existing.done || task.done),
       completedDate: task.completedDate || existing.completedDate || ""
     });
+  });
+  return [...map.values()];
+}
+
+function normalizeExpense(item = {}) {
+  const createdAt = Number(item.createdAt || item.updatedAt || 0);
+  const updatedAt = Number(item.updatedAt || item.createdAt || 0);
+  return {
+    ...item,
+    createdAt,
+    updatedAt
+  };
+}
+
+function expenseMergeKey(item = {}) {
+  return item.id || `${item.date}|${item.amount}|${item.category}|${item.note || ""}|${item.tripId || ""}`;
+}
+
+function pickNewerExpense(existing, incoming) {
+  const current = normalizeExpense(existing);
+  const next = normalizeExpense(incoming);
+  const currentUpdatedAt = Number(current.updatedAt || current.createdAt || 0);
+  const nextUpdatedAt = Number(next.updatedAt || next.createdAt || 0);
+  if (nextUpdatedAt > currentUpdatedAt) return next;
+  if (nextUpdatedAt < currentUpdatedAt) return current;
+  const currentScore = Number(Boolean(current.category)) + Number(Boolean(current.note)) + Number(Boolean(current.amount));
+  const nextScore = Number(Boolean(next.category)) + Number(Boolean(next.note)) + Number(Boolean(next.amount));
+  return nextScore >= currentScore ? next : current;
+}
+
+function mergeExpenses(baseExpenses, nextExpenses) {
+  const map = new Map();
+  [...(baseExpenses || []), ...(nextExpenses || [])].forEach((item) => {
+    if (!item) return;
+    const normalized = normalizeExpense(item);
+    const key = expenseMergeKey(normalized);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, normalized);
+      return;
+    }
+    map.set(key, pickNewerExpense(existing, normalized));
   });
   return [...map.values()];
 }

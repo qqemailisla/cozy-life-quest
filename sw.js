@@ -1,8 +1,9 @@
-const CACHE_NAME = "cozy-life-quest-cache-v3";
+const CACHE_NAME = "cozy-life-quest-cache-v4";
 const CORE_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
+  "./cloud-config.js",
   "./app.js",
   "./manifest.webmanifest",
   "./icon.svg",
